@@ -24,7 +24,7 @@
 | 部署 | 每个设备装一份安装包 | 一台机器跑 Docker，全屋设备浏览器访问 |
 | 打开目录 | 调系统文件管理器 | 直接在服务端目录里找（挂载卷） |
 | 事件推送 | Tauri event | WebSocket |
-| 认证 | 无 | 访问令牌（Bearer / Basic / `?token=`） |
+| 认证 | 无 | 可选访问令牌（Bearer / Basic / `?token=`），默认关闭 |
 
 功能面保持一致：漫画搜索、标签搜索、书架、一键下载、暂停/继续/取消、
 已下载漫画管理、导出 PDF / CBZ、日志面板、配置项（代理 / 并发 / 目录等）。
@@ -41,13 +41,16 @@ docker compose up -d --build
 
 然后浏览器打开 `http://<部署机 IP>:8082`。
 
-**首次登录**：容器第一次启动会随机生成访问令牌，并只打印一次：
+**认证默认关闭**，打开网页即可使用，无需登录（适合局域网自用）。
+
+如果要暴露到公网，请在 `.env` 里设 `WNACG_AUTH_DISABLED=false`，
+容器会在首次启动时随机生成访问令牌并只打印一次：
 
 ```bash
 docker compose logs wnacg-downloader-web | grep 访问令牌
 ```
 
-把令牌填进网页的登录框即可。
+把令牌填进网页的登录框即可；想固定下来就把值填进 `WNACG_AUTH_TOKEN`。
 
 详细的部署说明（端口冲突、代理配置、目录挂载、常见问题）
 见 **[DOCKER.md](./DOCKER.md)**。
@@ -109,6 +112,16 @@ cd src-server && cargo build --release
 3. ⚡ 使用更轻量的库实现原有功能
 4. 📝 修订文档
 5. ⬆️ 升级、更新依赖的 PR 也会被接受
+
+# 📄 许可
+
+本项目基于 [lanyeeee/wnacg-downloader](https://github.com/lanyeeee/wnacg-downloader)
+二次开发，沿用其 **MIT License**，原始版权归原作者所有：
+
+> MIT License
+> Copyright (c) 2025 lanyeeee (https://github.com/lanyeeee)
+
+完整许可文本见 [LICENSE](./LICENSE)。
 
 # ⚠️ 免责声明
 

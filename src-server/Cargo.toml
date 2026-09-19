@@ -2,7 +2,7 @@
 name = "wnacg-server"
 version = "0.1.0"
 description = "Web control panel for wnacg downloader (NAS / Docker)"
-authors = ["you"]
+license = "MIT"
 edition = "2021"
 
 [[bin]]
