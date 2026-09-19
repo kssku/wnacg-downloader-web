@@ -2,7 +2,7 @@ import { computed, defineComponent, onMounted, PropType } from 'vue'
 import { useStore } from '../../../store.ts'
 import { Comic, commands } from '../../../bindings.ts'
 import { NCard } from 'naive-ui'
-import { path } from '@tauri-apps/api'
+import { path } from '../../../tauri-shim.ts'
 import { PhFilePdf, PhFileZip, PhFolderOpen } from '@phosphor-icons/vue'
 import IconButton from '../../../components/IconButton.tsx'
 

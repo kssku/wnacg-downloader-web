@@ -16,9 +16,9 @@ import {
   NInput,
 } from 'naive-ui'
 import { commands } from '../bindings.ts'
-import { path } from '@tauri-apps/api'
-import { appDataDir } from '@tauri-apps/api/path'
-import { openUrl } from '@tauri-apps/plugin-opener'
+import { path } from '../tauri-shim.ts'
+import { appDataDir } from '../tauri-shim.ts'
+import { openUrl } from '../tauri-shim.ts'
 
 export default defineComponent({
   props: {

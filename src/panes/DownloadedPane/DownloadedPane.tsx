@@ -9,7 +9,7 @@ import {
   MessageReactive,
   NIcon,
 } from 'naive-ui'
-import { open } from '@tauri-apps/plugin-dialog'
+import { open } from '../../tauri-shim.ts'
 import { useStore } from '../../store.ts'
 import { Comic, commands, events } from '../../bindings.ts'
 import DownloadedComicCard from './components/DownloadedComicCard.tsx'

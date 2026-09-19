@@ -1,7 +1,7 @@
 import { computed, defineComponent, onMounted, PropType, watch } from 'vue'
 import { useStore } from '../store.ts'
 import { commands, events } from '../bindings.ts'
-import { path } from '@tauri-apps/api'
+import { path } from '../tauri-shim.ts'
 import { NEmpty, NButton } from 'naive-ui'
 import DownloadButton from '../components/DownloadButton.tsx'
 

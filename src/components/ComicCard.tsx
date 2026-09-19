@@ -1,7 +1,7 @@
 import { computed, defineComponent, onMounted, PropType } from 'vue'
 import { useStore } from '../store.ts'
 import { commands, Shelf } from '../bindings.ts'
-import { path } from '@tauri-apps/api'
+import { path } from '../tauri-shim.ts'
 import { NButton, NCard } from 'naive-ui'
 import DownloadButton from './DownloadButton.tsx'
 import styles from './ComicCard.module.css'

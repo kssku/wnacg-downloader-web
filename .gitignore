@@ -1,3 +1,25 @@
+# Rust
+src-server/target/
+target/
+
+# Node
+node_modules/
+dist
+dist-ssr
+*.local
+
+# 运行时数据（容器挂载出来的，不进版本库）
+data/
+comic-download/
+logs/
+*.db
+*.db-shm
+*.db-wal
+config.json
+
+# 环境
+.env
+
 # Logs
 logs
 *.log
@@ -6,11 +28,6 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
-
-node_modules
-dist
-dist-ssr
-*.local
 
 # Editor directories and files
 .vscode/*

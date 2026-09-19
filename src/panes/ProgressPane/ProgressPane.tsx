@@ -1,7 +1,7 @@
 import { defineComponent, onMounted, ref } from 'vue'
 import { useStore } from '../../store.ts'
 import { commands, events } from '../../bindings.ts'
-import { open } from '@tauri-apps/plugin-dialog'
+import { open } from '../../tauri-shim.ts'
 import { NButton, NIcon, NInput, NInputGroup, NInputGroupLabel, NTabPane, NTabs } from 'naive-ui'
 import UncompletedProgresses from './components/UncompletedProgresses.tsx'
 import CompletedProgress from './components/CompletedProgress.tsx'

@@ -1,7 +1,7 @@
 import { defineComponent, onMounted, ref } from 'vue'
-import { getVersion } from '@tauri-apps/api/app'
+import { getVersion } from '../tauri-shim.ts'
 import { NModal, NDialog, NA } from 'naive-ui'
-import icon from '../../src-tauri/icons/128x128.png'
+import icon from '../assets/app-icon.png'
 
 export default defineComponent({
   name: 'AboutDialog',

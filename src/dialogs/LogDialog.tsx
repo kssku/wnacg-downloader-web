@@ -13,8 +13,8 @@ import {
   NVirtualList,
 } from 'naive-ui'
 import { commands, events, LogEvent, LogLevel } from '../bindings.ts'
-import { appDataDir } from '@tauri-apps/api/path'
-import { path } from '@tauri-apps/api'
+import { appDataDir } from '../tauri-shim.ts'
+import { path } from '../tauri-shim.ts'
 import { useStore } from '../store.ts'
 
 type LogRecord = LogEvent & { id: number; formatedLog: string }
