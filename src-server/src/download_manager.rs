@@ -37,7 +37,7 @@ use crate::{
         DownloadSleepingEvent, DownloadSpeedEvent, DownloadTaskDeletedEvent, DownloadTaskEvent,
     },
     extensions::{AnyhowErrorToStringChain, AppContextExt},
-    store::{DbTaskState, ImageRepo, TaskRepo},
+    store::{DbTask, DbTaskState, ImageRepo, TaskRepo},
     types::Comic,
 };
 
@@ -98,7 +98,101 @@ impl DownloadManager {
 
         tokio::spawn(manager.clone().emit_download_speed_loop());
 
+        // 恢复上次进程遗留的未完成任务。
+        //
+        // 只捞 `pending` / `downloading` / `failed` 三种态（终态任务没有恢复价值）。
+        // 恢复需要重新走 wnacg API 拿漫画信息，是异步的，所以丢进后台任务。
+        // 恢复失败不阻断启动：服务能起来比任务列表完整更重要。
+        let recover_manager = manager.clone();
+        tokio::spawn(async move {
+            if let Err(err) = recover_manager.recover_pending_tasks().await {
+                tracing::error!(
+                    err_title = "恢复未完成下载任务失败",
+                    message = %err
+                );
+            }
+        });
+
         manager
+    }
+
+    /// 从 DB 里把上次进程遗留的未完成任务重新拉起。
+    ///
+    /// 这些任务只存了 `comic_id`，需要重新走一次 wnacg API 拿完整漫画信息
+    /// （标题、图片列表）才能重建 `DownloadTask`。
+    async fn recover_pending_tasks(&self) -> anyhow::Result<()> {
+        let tasks = TaskRepo::list_resumable(self.app.store())?;
+        if tasks.is_empty() {
+            return Ok(());
+        }
+
+        tracing::info!(count = tasks.len(), "发现未完成的下载任务，开始恢复");
+
+        let mut restored = 0usize;
+        for task in tasks {
+            match self.restore_one(&task).await {
+                Ok(()) => restored += 1,
+                Err(err) => {
+                    // 单个任务恢复失败（比如漫画已下架、站点连不上）
+                    // 不应拖垮其他任务。
+                    tracing::warn!(
+                        comic_id = task.comic_id,
+                        comic_title = task.comic_title,
+                        err_title = "恢复单个下载任务失败，已跳过",
+                        message = %err
+                    );
+                }
+            }
+        }
+
+        tracing::info!(restored, "未完成下载任务恢复完成");
+        Ok(())
+    }
+
+    /// 重建单个任务并重新挂进调度。
+    ///
+    /// 关键点：先按图片表的事实对齐进度，再走 `create_download_task`——
+    /// 它会调 `upsert_new` 保留已有状态与进度，所以恢复不会把一个
+    /// 下载到一半的任务打回原点。
+    ///
+    /// wnacg 无章节，`comic_id` 即任务主键，恢复比 jm/pica 简单。
+    async fn restore_one(&self, db_task: &DbTask) -> anyhow::Result<()> {
+        let comic_id = db_task.comic_id.clone();
+
+        // 进度对齐：图片表的 state 才是真相，DB 里的计数只是缓存。
+        match ImageRepo::count_done(self.app.store(), &comic_id) {
+            Ok(done) => {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let done = done.max(0) as u32;
+                // 恢复前把计数写回与图片表一致。
+                if let Err(err) =
+                    TaskRepo::set_progress(self.app.store(), &comic_id, i64::from(done))
+                {
+                    tracing::warn!(
+                        comic_id,
+                        err_title = "恢复时对齐任务进度失败",
+                        message = %err
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    comic_id,
+                    err_title = "恢复时统计已完成图片失败",
+                    message = %err
+                );
+            }
+        }
+
+        // 拿完整漫画信息（含图片列表）。
+        let comic = crate::utils::get_comic(&self.app, comic_id.clone())
+            .await
+            .context(format!("获取漫画`{comic_id}`信息失败"))?;
+
+        self.create_download_task(comic);
+
+        tracing::info!(comic_id, "已恢复下载任务");
+        Ok(())
     }
 
     /// 配置变更后原地调整并发度。
