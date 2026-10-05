@@ -37,6 +37,7 @@ use crate::{
         DownloadSleepingEvent, DownloadSpeedEvent, DownloadTaskDeletedEvent, DownloadTaskEvent,
     },
     extensions::{AnyhowErrorToStringChain, AppContextExt},
+    store::{DbTaskState, ImageRepo, TaskRepo},
     types::Comic,
 };
 
@@ -62,6 +63,21 @@ pub enum DownloadTaskState {
     Cancelled,
     Completed,
     Failed,
+}
+
+impl DownloadTaskState {
+    /// 映射到 DB 里的任务状态。两个枚举目前一一对应，
+    /// 分开定义是为了让 DB 层的状态演化不牵连运行期状态机。
+    pub fn to_db(self) -> DbTaskState {
+        match self {
+            Self::Pending => DbTaskState::Pending,
+            Self::Downloading => DbTaskState::Downloading,
+            Self::Paused => DbTaskState::Paused,
+            Self::Cancelled => DbTaskState::Cancelled,
+            Self::Completed => DbTaskState::Completed,
+            Self::Failed => DbTaskState::Failed,
+        }
+    }
 }
 
 impl DownloadManager {
@@ -120,6 +136,16 @@ impl DownloadManager {
             }
         }
         let task = DownloadTask::new(self.app.clone(), comic);
+        // 先落库再 spawn：任务一旦开始跑就必须在 DB 里可查，
+        // 否则重启恢复会漏掉「刚创建就崩溃」的任务。
+        // 落库失败不阻断下载本身，只记日志。
+        if let Err(err) = task.persist_new() {
+            let comic_title = &task.comic.title;
+            tracing::error!(
+                err_title = format!("`{comic_title}`持久化下载任务失败"),
+                message = %err
+            );
+        }
         tokio::spawn(task.clone().process());
         tasks.insert(comic_id, task);
     }
@@ -213,6 +239,9 @@ struct DownloadTask {
     state_sender: watch::Sender<DownloadTaskState>,
     downloaded_img_count: Arc<AtomicU32>,
     total_img_count: Arc<AtomicU32>,
+    /// 最近一次失败原因。`set_state(Failed)` 时随状态一起落库，
+    /// 让恢复后的任务能看到「上次为什么挂」。
+    last_error: Arc<RwLock<Option<String>>>,
 }
 
 impl DownloadTask {
@@ -226,6 +255,58 @@ impl DownloadTask {
             state_sender,
             downloaded_img_count: Arc::new(AtomicU32::new(0)),
             total_img_count: Arc::new(AtomicU32::new(0)),
+            last_error: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    /// 把新任务写进 `download_task`（`state = pending`）。
+    ///
+    /// 对齐 jmcomic/picacomic：任务一旦开始跑就必须在 DB 里可查。
+    /// wnacg 没有章节，`comic_id` 即任务主键。
+    fn persist_new(&self) -> anyhow::Result<()> {
+        let download_dir = self
+            .app
+            .get_config()
+            .read()
+            .download_dir
+            .to_string_lossy()
+            .to_string();
+        TaskRepo::upsert_new(
+            self.app.store(),
+            &self.comic.id,
+            &self.comic.title,
+            &download_dir,
+        )
+    }
+
+    /// 把内存里的进度计数刷进 `download_task`。
+    ///
+    /// `total` 只在首次调用时写入（`set_total_img_count` 会把
+    /// `done_img_count` 一并归零，重复调用会冲掉已完成的计数）。
+    /// 与 jmcomic/picacomic 一致：DB 里的计数只是给前端和青龙看的缓存，
+    /// `download_image.state` 才是真相，所以这里失败只 warn。
+    fn persist_progress(&self, done: u32, total: u32, write_total: bool) {
+        let comic_id = &self.comic.id;
+        if write_total {
+            if let Err(err) = TaskRepo::set_total_img_count(
+                self.app.store(),
+                comic_id,
+                i64::from(total),
+            ) {
+                tracing::warn!(
+                    err_title = "写入任务图片总数失败（不影响下载）",
+                    comic_id,
+                    message = %err
+                );
+                return;
+            }
+        }
+        if let Err(err) = TaskRepo::set_progress(self.app.store(), comic_id, i64::from(done)) {
+            tracing::warn!(
+                err_title = "写入任务进度失败（不影响下载）",
+                comic_id,
+                message = %err
+            );
         }
     }
 
@@ -289,6 +370,16 @@ impl DownloadTask {
             tracing::error!(err_title, message = string_chain);
             return;
         }
+        // 登记图片清单（断点续传的锚点：已 done 的图片不会被重置）。
+        // 顺便把 total 写进任务表——`set_total_img_count` 会把 done 归零，
+        // 所以只在这一处调用一次。
+        if let Err(err) = ImageRepo::insert_many(self.app.store(), &comic_id, &img_urls) {
+            let err_title = format!("`{comic_title}`登记图片清单失败");
+            let string_chain = err.to_string_chain();
+            tracing::error!(err_title, message = string_chain);
+        }
+        self.persist_progress(0, self.total_img_count.load(Ordering::Relaxed), true);
+
         // 逐一创建下载任务
         for (i, url) in img_urls.into_iter().enumerate() {
             let temp_download_dir = temp_download_dir.clone();
@@ -519,6 +610,19 @@ impl DownloadTask {
 
     fn set_state(&self, state: DownloadTaskState) {
         let comic_title = &self.comic.title;
+        // 先落库再广播：让持久状态成为真相源，内存与事件都是它的投影。
+        // 落库失败只记日志不中断——下载本身比任务记录更重要。
+        let last_error = self.last_error.read().clone();
+        if let Err(err) = TaskRepo::set_state(
+            self.app.store(),
+            &self.comic.id,
+            state.to_db(),
+            last_error.as_deref(),
+        ) {
+            let err_title = format!("`{comic_title}`持久化状态`{state:?}`失败");
+            let string_chain = err.to_string_chain();
+            tracing::error!(err_title, message = string_chain);
+        }
         if let Err(err) = self.state_sender.send(state).map_err(anyhow::Error::from) {
             let err_title = format!("`{comic_title}`发送状态`{state:?}`失败");
             let string_chain = err.to_string_chain();
@@ -685,9 +789,23 @@ impl DownloadImgTask {
             if user_format_path.exists() || gif_path.exists() {
                 // 如果图片已存在，则跳过下载
                 tracing::trace!(comic_id, comic_title, url, "图片已存在，跳过下载");
-                self.download_task
+                #[allow(clippy::cast_possible_wrap)]
+                let img_index = self.index as i64;
+                if let Err(err) =
+                    ImageRepo::mark_done(self.app.store(), &comic_id, img_index, None)
+                {
+                    tracing::error!(
+                        err_title = format!("标记图片`{img_index}`完成失败"),
+                        message = %err
+                    );
+                }
+                let done = self
+                    .download_task
                     .downloaded_img_count
-                    .fetch_add(1, Ordering::Relaxed);
+                    .fetch_add(1, Ordering::Relaxed)
+                    + 1;
+                let total = self.download_task.total_img_count.load(Ordering::Relaxed);
+                self.download_task.persist_progress(done, total, false);
                 self.download_task.emit_download_task_event();
                 return;
             }
@@ -707,6 +825,17 @@ impl DownloadImgTask {
                 let err_title = format!("下载图片`{url}`失败");
                 let string_chain = err.to_string_chain();
                 tracing::error!(err_title, message = string_chain);
+                // 记录失败原因。**不**推进计数——它仍然是未完成的。
+                #[allow(clippy::cast_possible_wrap)]
+                let img_index = self.index as i64;
+                if let Err(err) =
+                    ImageRepo::mark_failed(self.app.store(), &comic_id, img_index, &string_chain)
+                {
+                    tracing::error!(
+                        err_title = format!("记录图片`{img_index}`失败原因失败"),
+                        message = %err
+                    );
+                }
                 return;
             }
         };
@@ -760,9 +889,26 @@ impl DownloadImgTask {
             .byte_per_sec
             .fetch_add(img_data_len, Ordering::Relaxed);
 
-        self.download_task
+        #[allow(clippy::cast_possible_wrap)]
+        let img_index = self.index as i64;
+        if let Err(err) = ImageRepo::mark_done(
+            self.app.store(),
+            &comic_id,
+            img_index,
+            Some(img_data_len as i64),
+        ) {
+            tracing::error!(
+                err_title = format!("标记图片`{img_index}`完成失败"),
+                message = %err
+            );
+        }
+        let done = self
+            .download_task
             .downloaded_img_count
-            .fetch_add(1, Ordering::Relaxed);
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
+        let total = self.download_task.total_img_count.load(Ordering::Relaxed);
+        self.download_task.persist_progress(done, total, false);
         self.download_task.emit_download_task_event();
 
         let img_download_interval_sec = self.app.get_config().read().img_download_interval_sec;
