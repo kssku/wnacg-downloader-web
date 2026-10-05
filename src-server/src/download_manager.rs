@@ -38,7 +38,7 @@ use crate::{
     },
     extensions::{AnyhowErrorToStringChain, AppContextExt},
     store::{DbTask, DbTaskState, ImageRepo, TaskRepo},
-    types::Comic,
+    types::{ChapterInfo, Comic},
 };
 
 /// 用于管理下载任务
@@ -336,20 +336,60 @@ struct DownloadTask {
     /// 最近一次失败原因。`set_state(Failed)` 时随状态一起落库，
     /// 让恢复后的任务能看到「上次为什么挂」。
     last_error: Arc<RwLock<Option<String>>>,
+    /// 本任务对应的章节信息。
+    ///
+    /// wnacg 站点为单本无章节结构，这里存的始终是
+    /// `comic.chapter_infos[0]`（合成章节，`chapter_id == comic.id`）。
+    /// 字段存在的意义是**形状对齐** jmcomic/picacomic 的 `DownloadTask`
+    /// ——前端可统一按「章节」渲染。
+    ///
+    /// 注意：wnacg 的目录名生成**不读本字段**，仍是
+    /// `config.download_dir.join(comic.title)` 直接拼出。
+    ///
+    /// 因此本字段目前**没有任何读取点**，`#[allow(dead_code)]` 是
+    /// 有意为之——它不是遗漏，是「形状对齐但暂不驱动行为」的显式标记。
+    #[allow(dead_code)]
+    chapter_info: Arc<ChapterInfo>,
+    /// 章节级重试次数。
+    ///
+    /// 诚实说明：wnacg **没有章节级重试**（图片级重试记在
+    /// `download_image.retry_count`），因此本值在实际运行中**恒为 0**。
+    /// 保留它纯粹是对齐 jmcomic/picacomic 的 `DownloadTask` 形状，
+    /// 不代表 wnacg 有对应的重试语义。
+    ///
+    /// 与 `chapter_info` 同理，目前没有任何读取点，`#[allow(dead_code)]`
+    /// 是显式标记而非遗漏。
+    #[allow(dead_code)]
+    retry_count: Arc<AtomicU32>,
 }
 
 impl DownloadTask {
     pub fn new(app: AppContext, comic: Comic) -> Self {
         let download_manager = app.get_download_manager();
         let (state_sender, _) = watch::channel(DownloadTaskState::Pending);
+
+        // wnacg 的 `comic.chapter_infos` 由 `Comic::from_html` /
+        // `Comic::from_metadata` 合成为恒定单元素列表。这里取其首项即可；
+        // 若为空（理论上不该发生）则就地合成一个，避免下游 panic。
+        let chapter_info = comic.chapter_infos.first().cloned().unwrap_or_else(|| ChapterInfo {
+            chapter_id: comic.id.clone(),
+            chapter_title: comic.title.clone(),
+            order: 1,
+            is_downloaded: None,
+            chapter_download_dir: None,
+        });
+
         Self {
             app,
             download_manager,
             comic: Arc::new(comic),
+            chapter_info: Arc::new(chapter_info),
             state_sender,
             downloaded_img_count: Arc::new(AtomicU32::new(0)),
             total_img_count: Arc::new(AtomicU32::new(0)),
             last_error: Arc::new(RwLock::new(None)),
+            // wnacg 无章节级重试，恒为 0（见字段注释）。
+            retry_count: Arc::new(AtomicU32::new(0)),
         }
     }
 

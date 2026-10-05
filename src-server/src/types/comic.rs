@@ -10,7 +10,7 @@ use crate::{
     utils::filename_filter,
 };
 
-use super::{ImgList, Tag};
+use super::{ChapterInfo, ImgList, Tag};
 
 /// 漫画详情。也是写出 `元数据.json` 的结构，所以字段必须保持可反序列化。
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -38,6 +38,16 @@ pub struct Comic {
     /// 是否已下载。`None` 表示「未知」，序列化时省略。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_downloaded: Option<bool>,
+    /// wnacg 站点为单本无章节结构，此处合成恒定单元素列表以对齐
+    /// jmcomic/picacomic 的领域模型形状（前端可统一按「章节」渲染）。
+    ///
+    /// 注意：本字段**不参与目录生成**——wnacg 的下载目录名由
+    /// `download_dir.join(comic.title)` 直接拼出，不走 `chapter_download_dir`。
+    /// 保留它是为了形状对齐，不是路径计算来源。
+    ///
+    /// `#[serde(default)]` 保证旧 `元数据.json`（不含本字段）仍可反序列化。
+    #[serde(default)]
+    pub chapter_infos: Vec<ChapterInfo>,
     /// 图片列表
     pub img_list: ImgList,
 }
@@ -153,6 +163,17 @@ impl Comic {
         let is_downloaded = ctx.get_config().read().download_dir.join(&title).exists();
         let is_downloaded = Some(is_downloaded);
 
+        // wnacg 站点为单本无章节结构，此处合成恒定单元素列表以对齐
+        // jmcomic/picacomic 的领域模型形状。`chapter_id` 恒等于 `id`。
+        // 该列表**不参与目录生成**（见 `Comic::chapter_infos` 的文档注释）。
+        let chapter_infos = vec![ChapterInfo {
+            chapter_id: id.clone(),
+            chapter_title: title.clone(),
+            order: 1,
+            is_downloaded: None,
+            chapter_download_dir: None,
+        }];
+
         Ok(Comic {
             id,
             title,
@@ -162,6 +183,7 @@ impl Comic {
             tags,
             intro,
             is_downloaded,
+            chapter_infos,
             img_list,
         })
     }
@@ -187,6 +209,53 @@ impl Comic {
             .join(&comic.title)
             .exists();
         comic.is_downloaded = Some(is_downloaded);
+
+        // 旧版 `元数据.json` 不含 `chapterInfos`（`#[serde(default)]` 让它反序列化成
+        // 空列表）。这里补上合成章节，保证内存中的 `Comic` 形状始终一致——
+        // 下游（如 `DownloadTask::new` 取 `chapter_infos[0]`）不必再判空。
+        if comic.chapter_infos.is_empty() {
+            comic.chapter_infos = vec![ChapterInfo {
+                chapter_id: comic.id.clone(),
+                chapter_title: comic.title.clone(),
+                order: 1,
+                is_downloaded: None,
+                chapter_download_dir: None,
+            }];
+        }
+
         Ok(comic)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Comic;
+
+    /// 旧版 `元数据.json`（0c 之前写出）不含 `chapterInfos` 字段。
+    /// `#[serde(default)]` 必须让它反序列化成功，且得到空列表。
+    #[test]
+    fn legacy_metadata_without_chapter_infos_deserializes() {
+        let legacy = r#"{"id":"888001","title":"旧格式","cover":"","category":"",
+            "imageCount":1,"tags":[],"intro":"",
+            "imgList":[{"caption":"[01]","url":"//x/1.jpg"}]}"#;
+        let comic: Comic = serde_json::from_str(legacy).expect("旧元数据应能反序列化");
+        assert_eq!(comic.id, "888001");
+        assert!(
+            comic.chapter_infos.is_empty(),
+            "缺省时应为空列表（由 Comic::from_metadata 补合成章节）"
+        );
+    }
+
+    /// 新格式（含 `chapterInfos`）应原样反序列化。
+    #[test]
+    fn new_metadata_with_chapter_infos_roundtrips() {
+        let json = r#"{"id":"888002","title":"新格式","cover":"","category":"",
+            "imageCount":1,"tags":[],"intro":"",
+            "chapterInfos":[{"chapterId":"888002","chapterTitle":"新格式","order":1}],
+            "imgList":[{"caption":"[01]","url":"//x/1.jpg"}]}"#;
+        let comic: Comic = serde_json::from_str(json).expect("新元数据应能反序列化");
+        assert_eq!(comic.chapter_infos.len(), 1);
+        assert_eq!(comic.chapter_infos[0].chapter_id, "888002");
+        assert_eq!(comic.chapter_infos[0].order, 1);
     }
 }

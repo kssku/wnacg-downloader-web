@@ -3,6 +3,7 @@
 //! 相对桌面版的唯一改动：`from_html` 系列不再接收 `tauri::AppHandle`，
 //! 而是接收 `&AppContext`（用于读配置里的下载目录与 API 域名）。
 
+mod chapter_info;
 mod comic;
 mod comic_info;
 mod download_format;
@@ -13,6 +14,7 @@ mod search_result;
 mod tag;
 mod user_profile;
 
+pub use chapter_info::*;
 pub use comic::*;
 pub use comic_info::*;
 pub use download_format::*;

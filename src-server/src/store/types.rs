@@ -231,10 +231,15 @@ impl DbImageState {
 /// `download_task` 的一行。
 ///
 /// wnacg 的任务粒度是**整本漫画**（不像 jmcomic 分章节），
-/// 因此主键是 `comic_id`，没有 `chapter_*` 字段。
+/// 因此主键是 `comic_id`。
 ///
 /// `comic_id` 类型为 `String` 以对齐 jmcomic/picacomic 的领域模型
 /// ——它们的三级模型是「漫画 → 章节 → 图片」，而 wnacg 没有章节层。
+///
+/// 关于 `chapter_*` 列：0a 类型统一后，`ChapterInfo` 已作为合成单章节
+/// 进入领域模型（`chapter_id` 恒等于 `comic_id`）。对应的 `chapter_id`
+/// 列将在 **0d** 的 schema 迁移中加入，届时其值同样恒等于 `comic_id`
+/// ——即「一个漫画一个合成章节」在 DB 层的投影。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DbTask {
