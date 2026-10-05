@@ -1,7 +1,15 @@
 # WebSocket 契约
 
 前端与后端之间唯一的实时通道。本文档描述连接方式、消息格式、topic 常量、
-心跳与重连，以及**当前存在的 topic 不匹配问题**。
+心跳与重连。
+
+> **2026-10 修复记录**：此前前后端各自使用一套 topic 命名体系
+> （后端 `snake_case` 无后缀、前端 `kebab-case` + `-event` 后缀），
+> 交集为 0，导致事件在客户端 `dispatch()` 处被静默丢弃、**整个实时事件
+> 系统失效**（进度不更新、日志不流式、刷新不补状态）。本次已把后端
+> topic 字符串改为与前端（亦与 jmcomic / picacomic 后端）一致的
+> `kebab-case` + `-event` 命名，并新增独立的 `TASK_SNAPSHOT` 常量。
+> 详见第 6 节。
 
 **以 `src-server/src/event_bus.rs` 与 `src-server/src/api/ws.rs` 为准。**
 
@@ -17,9 +25,9 @@
 | 服务端心跳 | Ping，**30s**（首次 tick 跳过） |
 | 客户端心跳 | 文本 `"ping"`，**25s** |
 | 重连 | 指数退避，1000ms 起，×2，上限 15000ms |
-| topic 常量数（后端） | **10** |
+| topic 常量数（后端） | **11**（10 个业务 + `TASK_SNAPSHOT`） |
 | 前端订阅 topic 数 | **9** |
-| 前后端匹配的 topic 数 | **0** ⚠️ |
+| 前后端匹配的 topic 数 | **9 / 9** ✅（2026-10 修复后） |
 
 ---
 
@@ -36,7 +44,7 @@
 
 ```rust
 let snapshot = SnapshotMessage {
-    topic: topics::DOWNLOAD_TASK,          // ws.rs:53
+    topic: topics::TASK_SNAPSHOT,          // ws.rs:53
     payload: app.download_manager().snapshot(),
 };
 ```
@@ -98,28 +106,37 @@ pub struct BusMessage {
 
 ## 4. topic 常量（后端）
 
-`src-server/src/event_bus.rs:15-28` 定义 `pub mod topics`，共 **10** 个常量：
+`src-server/src/event_bus.rs:15-31` 定义 `pub mod topics`，共 **11** 个常量
+（10 个业务 topic + `TASK_SNAPSHOT`）：
 
 | # | 常量名 | 值 | event_bus.rs 行 | 有 emit 点？ |
 | --- | --- | --- | --- | --- |
-| 1 | `DOWNLOAD_TASK` | `download_task` | 16 | ✅ `download_manager.rs:543`、`:550`、快照 `ws.rs:53` |
-| 2 | `DOWNLOAD_TASK_DELETED` | `download_task_deleted` | 19 | ✅ `download_manager.rs:550` |
-| 3 | `DOWNLOAD_SPEED` | `download_speed` | 20 | ✅ `download_manager.rs:203` |
-| 4 | `DOWNLOAD_SLEEPING` | `download_sleeping` | 21 | ✅ `download_manager.rs:508` |
-| 5 | `EXPORT_PDF` | `export_pdf` | 22 | ✅ `export.rs:155`、`:172` |
-| 6 | `EXPORT_CBZ` | `export_cbz` | 23 | ✅ `export.rs:63`、`:143` |
-| 7 | `DOWNLOAD_SHELF` | `download_shelf` | 24 | ✅ `commands.rs:384`、`:440`、`:450` |
-| 8 | `LOG` | `log` | 25 | ✅ `logger.rs:36` |
-| 9 | `AUTH` | `auth` | 26 | ❌ **无 emit 点** |
-| 10 | `CONFIG_CHANGED` | `config_changed` | 27 | ⚠️ `commands.rs:78`（当前不可达） |
+| 1 | `DOWNLOAD_TASK` | `download-task-event` | 16 | ✅ `download_manager.rs:543`、`:550` |
+| 2 | `DOWNLOAD_TASK_DELETED` | `download-task-deleted-event` | 19 | ✅ `download_manager.rs:550` |
+| 3 | `DOWNLOAD_SPEED` | `download-speed-event` | 20 | ✅ `download_manager.rs:203` |
+| 4 | `DOWNLOAD_SLEEPING` | `download-sleeping-event` | 21 | ✅ `download_manager.rs:508` |
+| 5 | `EXPORT_PDF` | `export-pdf-event` | 22 | ✅ `export.rs:155`、`:172` |
+| 6 | `EXPORT_CBZ` | `export-cbz-event` | 23 | ✅ `export.rs:63`、`:143` |
+| 7 | `DOWNLOAD_SHELF` | `download-shelf-event` | 24 | ✅ `commands.rs:384`、`:440`、`:450` |
+| 8 | `LOG` | `log-event` | 25 | ✅ `logger.rs:36` |
+| 9 | `AUTH` | `auth-event` | 26 | ❌ **无 emit 点** |
+| 10 | `CONFIG_CHANGED` | `config-changed-event` | 27 | ⚠️ `commands.rs:78`（当前不可达） |
+| 11 | `TASK_SNAPSHOT` | `task-snapshot-event` | 30 | ✅ 快照 `ws.rs:53`（绕过总线，直接 `sender.send`） |
 
-**topic 常量数核对：10。**
+**topic 常量数核对：11。** 命名统一为 `kebab-case` + `-event` 后缀，与前端
+`TOPIC_MAP`（`bindings.ts:484-494`）以及 jmcomic / picacomic 后端的命名
+**逐字一致**。
+
+`TASK_SNAPSHOT` 与 `DOWNLOAD_TASK` 分开的原因：两者 payload 形状不同 ——
+快照是 `DownloadTaskEvent[]`（数组），增量事件是单个 `DownloadTaskEvent` 对象。
+复用同一个 topic 会让前端无法区分「整体替换」与「单条更新」（此前
+`ws.rs:53` 正是复用了 `DOWNLOAD_TASK`，属于双重错位）。
 
 关于两个「异常」常量：
 
-- **`AUTH`（`auth`）**：只有 `AuthEvent` 结构体（`events.rs:115`）存在，
+- **`AUTH`（`auth-event`）**：只有 `AuthEvent` 结构体（`events.rs:115`）存在，
   **从未被 emit**。属于声明但未使用的常量。
-- **`CONFIG_CHANGED`（`config_changed`）**：emit 点位于 `commands.rs:78`，
+- **`CONFIG_CHANGED`（`config-changed-event`）**：emit 点位于 `commands.rs:78`，
   在配置保存成功**之后**。由于 `POST /api/config` 的请求体包装错位导致保存
   永远失败（见 `API.md` 第 4.1 节），这条事件**实际不可达**。
 

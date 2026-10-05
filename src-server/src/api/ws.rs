@@ -50,7 +50,7 @@ async fn handle_socket(socket: WebSocket, app: AppContext) {
     // 先补发任务快照，再转发实时事件。顺序很重要：
     // 前端收到快照后会把任务列表整体替换，随后到达的 Update 事件才有正确的基线。
     let snapshot = SnapshotMessage {
-        topic: topics::DOWNLOAD_TASK,
+        topic: topics::TASK_SNAPSHOT,
         payload: app.download_manager().snapshot(),
     };
     if let Ok(text) = serde_json::to_string(&snapshot) {

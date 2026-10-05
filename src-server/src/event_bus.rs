@@ -13,18 +13,21 @@ use tokio::sync::broadcast;
 
 /// 事件主题常量。前端按 `topic` 分发到不同的处理函数。
 pub mod topics {
-    pub const DOWNLOAD_TASK: &str = "download_task";
+    pub const DOWNLOAD_TASK: &str = "download-task-event";
     /// 任务被移除（前端把卡片删掉）。与 `DOWNLOAD_TASK` 分开，
     /// 避免前端在处理状态事件时还要区分「这是删除」这种特殊载荷。
-    pub const DOWNLOAD_TASK_DELETED: &str = "download_task_deleted";
-    pub const DOWNLOAD_SPEED: &str = "download_speed";
-    pub const DOWNLOAD_SLEEPING: &str = "download_sleeping";
-    pub const EXPORT_PDF: &str = "export_pdf";
-    pub const EXPORT_CBZ: &str = "export_cbz";
-    pub const DOWNLOAD_SHELF: &str = "download_shelf";
-    pub const LOG: &str = "log";
-    pub const AUTH: &str = "auth";
-    pub const CONFIG_CHANGED: &str = "config_changed";
+    pub const DOWNLOAD_TASK_DELETED: &str = "download-task-deleted-event";
+    pub const DOWNLOAD_SPEED: &str = "download-speed-event";
+    pub const DOWNLOAD_SLEEPING: &str = "download-sleeping-event";
+    pub const EXPORT_PDF: &str = "export-pdf-event";
+    pub const EXPORT_CBZ: &str = "export-cbz-event";
+    pub const DOWNLOAD_SHELF: &str = "download-shelf-event";
+    pub const LOG: &str = "log-event";
+    pub const AUTH: &str = "auth-event";
+    pub const CONFIG_CHANGED: &str = "config-changed-event";
+    /// 建连时补发的全量任务快照。与增量事件 `DOWNLOAD_TASK` 分开：
+    /// 快照 payload 是 `DownloadTaskEvent[]`（数组），增量是单个对象。
+    pub const TASK_SNAPSHOT: &str = "task-snapshot-event";
 }
 
 /// 一条待广播的消息。`topic` 决定前端的分发分支，`payload` 是已经序列化好的 JSON。
