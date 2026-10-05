@@ -3,7 +3,7 @@ body {
 }
 
 .selection-area {
-    @apply bg-[rgba(46,115,252,0.5)];
+    @apply bg-[var(--neutral-selection)];
 }
 
 .n-notification-main__header {

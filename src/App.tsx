@@ -7,18 +7,19 @@ import {
   NMessageProvider,
   GlobalThemeOverrides,
 } from 'naive-ui'
+import { palette, radii } from './design-tokens'
 
 export default defineComponent({
   name: 'App',
   setup() {
     const themeOverrides: GlobalThemeOverrides = {
       common: {
-        primaryColor: '#1677FF',
-        primaryColorHover: '#4096FF',
-        primaryColorPressed: '#0958D9',
-        primaryColorSuppl: '#4096FF',
-        borderRadius: '4px',
-        borderRadiusSmall: '3px',
+        primaryColor: palette.primary.DEFAULT,
+        primaryColorHover: palette.primary.hover,
+        primaryColorPressed: palette.primary.pressed,
+        primaryColorSuppl: palette.primary.suppl,
+        borderRadius: radii.md,
+        borderRadiusSmall: radii.sm,
         heightMedium: '32px',
       },
       Button: {
@@ -26,14 +27,14 @@ export default defineComponent({
         paddingMedium: '0 12px',
       },
       Radio: {
-        buttonColorActive: '#1677FF',
-        buttonTextColorActive: '#FFF',
+        buttonColorActive: palette.primary.DEFAULT,
+        buttonTextColorActive: palette.neutral.onPrimary,
       },
       Dropdown: {
         borderRadius: '5px',
         padding: '6px 2px',
-        optionColorHover: '#1677FF',
-        optionTextColorHover: '#FFF',
+        optionColorHover: palette.primary.DEFAULT,
+        optionTextColorHover: palette.neutral.onPrimary,
         optionHeightMedium: '28px',
       },
     }

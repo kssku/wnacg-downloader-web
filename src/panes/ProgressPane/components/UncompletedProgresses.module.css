@@ -1,9 +1,9 @@
 .selectionContainer {
     :global(.selected) {
-        @apply bg-[rgb(204,232,255)];
+        @apply bg-[var(--neutral-selected)];
     }
 
     :global(.downloaded) {
-        @apply bg-[rgba(24,160,88,0.16)];
+        @apply bg-[var(--state-downloaded)];
     }
 }
