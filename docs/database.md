@@ -54,11 +54,33 @@ wnacg-downloader-web 用 SQLite 持久化下载任务与图片明细，用于断
 
 `created_at` / `updated_at` 是 Unix 时间戳（`store/types.rs` 的 `now_ts()`）。
 
-> ⚠️ `state` 列上方的注释（`:49`）写着
-> `pending / running / completed / failed / cancelled`，**已过期**：
-> 实际枚举是 `pending` / `downloading` / `paused` / `cancelled` /
-> `completed` / `failed`。注释里的 `running` 不存在，且漏了 `downloading`
-> 与 `paused`。列本身是 `TEXT`、无 CHECK 约束，因此**不影响行为**。
+`state` 列的合法取值见 `DbTaskState::as_str()`（`store/types.rs`）：
+`pending` / `downloading` / `paused` / `cancelled` / `completed` / `failed`，
+与 `migrations.rs:49` 的注释一致。列本身是 `TEXT`、无 CHECK 约束。
+
+> **历史注记**：该注释曾写着 `pending / running / completed / failed /
+cancelled` —— `running` 从未存在过，且漏了 `downloading` 与 `paused`。
+> 已于本轮修正。因为列无 CHECK 约束，此前的错误注释**从未影响行为**。
+
+#### state 的两套表示
+
+任务状态在两条通道上有不同格式，**各自自洽**：
+
+| 层 | 格式 | 来源 |
+|---|---|---|
+| DB / REST | 小写 `"downloading"` | `DbTaskState::as_str()` |
+| WebSocket | PascalCase `"Downloading"` | `DownloadTaskState` 的 serde 序列化 |
+
+**前端只消费 WS 的 state**（PascalCase），REST 的 state 从不进入 UI。
+
+> **设计说明**：前端**不消费** `/api/tasks`，任务列表仅由 WebSocket 驱动
+> （`download-task-event` 增量 + `task-snapshot-event` 首屏补齐）。
+> 这是**有意的设计**，不是遗漏。
+>
+> ⚠️ **防坑提示**：若将来为前端新增 `/api/tasks` 的 REST 消费，**必须同时
+> 引入归一化**（把 REST 小写 state 转成 PascalCase 再写入 store），否则状态
+> 比较会静默失效 —— 已完成任务会永远留在「未完成」tab，不报错、类型检查
+> 也过。jmcomic 已踩过此坑，见其 `src/api/state-adapter.ts` 顶部注释。
 
 ### 2.2 `download_image` —— 9 列
 

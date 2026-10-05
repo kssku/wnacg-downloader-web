@@ -46,7 +46,8 @@ fn migrate_v1(conn: &Connection) -> anyhow::Result<()> {
         CREATE TABLE IF NOT EXISTS download_task (
             comic_id         INTEGER PRIMARY KEY,
             comic_title      TEXT    NOT NULL,
-            -- pending / running / completed / failed / cancelled
+            -- 取值见 DbTaskState::as_str()：pending / downloading / paused /
+            -- cancelled / completed / failed
             state            TEXT    NOT NULL DEFAULT 'pending',
             total_img_count  INTEGER NOT NULL DEFAULT 0,
             done_img_count   INTEGER NOT NULL DEFAULT 0,

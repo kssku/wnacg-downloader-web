@@ -196,19 +196,16 @@ async saveConfig(config: Config): Promise<Result<null, CommandError>> {
 > 本轮**只记录、不修复**。修复与 picacomic 的同名问题（commit `17f2c41`）
 > 一致，改法是去掉 `{ }`，改为 `post("/api/config", config)`。
 
-### 4.2 `migrate_v1` 的枚举注释已过期
+### 4.2 `migrate_v1` 的枚举注释（已修正）
 
-`store/migrations.rs:49` 的建表注释写着：
+`store/migrations.rs:49` 的建表注释曾写着 `pending / running / completed /
+failed / cancelled` —— `running` 从未存在过，且漏了 `downloading` 与
+`paused`。
 
-```sql
--- pending / running / completed / failed / cancelled
-```
+**已于本轮修正**，现与 `DbTaskState::as_str()` 一致：
+`pending` / `downloading` / `paused` / `cancelled` / `completed` / `failed`。
 
-但实际 `DbTaskState` 的变体是 `pending` / `downloading` / `paused` /
-`cancelled` / `completed` / `failed` —— 注释里的 `running` 不存在，且漏了
-`downloading` 和 `paused`。
-
-**仅注释过期，不影响行为**（列是 `TEXT`，无 CHECK 约束）。
+此前因列是 `TEXT` 且无 CHECK 约束，**该错误注释从未影响行为**。
 
 ---
 
