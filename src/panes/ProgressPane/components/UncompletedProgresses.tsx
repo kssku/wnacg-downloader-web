@@ -24,11 +24,11 @@ export default defineComponent({
 
     const batchDownloadDialogShowing = ref<boolean>(false)
 
-    const selectedIds = ref<Set<number>>(new Set())
+    const selectedIds = ref<Set<string>>(new Set())
     const selectionAreaRef = ref<InstanceType<typeof SelectionArea>>()
-    const selectableRefs = ref<HTMLDivElement[]>([])
+    const selectableRefs = ref<Record<string, HTMLDivElement>>({})
 
-    const uncompletedProgresses = computed<[number, ProgressData][]>(() =>
+    const uncompletedProgresses = computed<[string, ProgressData][]>(() =>
       Array.from(store.progresses.entries())
         .filter(([, { state }]) => state !== 'Completed' && state !== 'Cancelled')
         .sort((a, b) => b[1].totalImgCount - a[1].totalImgCount),
@@ -56,7 +56,7 @@ export default defineComponent({
       }
     }
 
-    async function handleProgressDoubleClick(state: DownloadTaskState, comicId: number) {
+    async function handleProgressDoubleClick(state: DownloadTaskState, comicId: string) {
       if (state === 'Downloading' || state === 'Pending') {
         const result = await commands.pauseDownloadTask(comicId)
         if (result.status === 'error') {
@@ -70,7 +70,7 @@ export default defineComponent({
       }
     }
 
-    function handleProgressContextMenu(comicId: number) {
+    function handleProgressContextMenu(comicId: string) {
       if (selectedIds.value.has(comicId)) {
         return
       }
@@ -99,7 +99,7 @@ export default defineComponent({
             if (selection === undefined) {
               return
             }
-            selection.select(selectableRefs.value)
+            selection.select(Object.values(selectableRefs.value))
             dropdownShowing.value = false
           },
         },
@@ -287,11 +287,10 @@ function DownloadProgress({
   )
 }
 
-function extractIds(elements: Element[]): number[] {
+function extractIds(elements: Element[]): string[] {
   return elements
     .map((element) => element.getAttribute('data-key'))
-    .filter(Boolean)
-    .map(Number)
+    .filter((id): id is string => id !== null)
 }
 
 function stateToStatus(state: DownloadTaskState): ProgressProps['status'] {

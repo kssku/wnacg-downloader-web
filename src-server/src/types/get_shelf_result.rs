@@ -137,7 +137,7 @@ impl GetShelfResult {
 #[serde(rename_all = "camelCase")]
 pub struct ComicInShelf {
     /// 漫画 id
-    pub id: i64,
+    pub id: String,
     /// 漫画标题
     pub title: String,
     /// 漫画封面链接
@@ -191,7 +191,7 @@ impl ComicInShelf {
         })
     }
 
-    fn get_id_and_title(div: &ElementRef) -> anyhow::Result<(i64, String)> {
+    fn get_id_and_title(div: &ElementRef) -> anyhow::Result<(String, String)> {
         let div_html = div.html();
         let a = div
             .select(&Selector::parse(".l_title > a").to_anyhow()?)
@@ -206,8 +206,7 @@ impl ComicInShelf {
             .context(format!("href不是以`/photos-index-aid-`开头: {a_html}"))?
             .strip_suffix(".html")
             .context(format!("href不是以`.html`结尾: {a_html}"))?
-            .parse::<i64>()
-            .context(format!("id不是整数: {a_html}"))?;
+            .to_string();
 
         let title = a
             .text()

@@ -8,12 +8,12 @@ export const useStore = defineStore('store', () => {
   const userProfile = ref<UserProfile>()
   const pickedComic = ref<Comic>()
   const currentTabName = ref<CurrentTabName>('search')
-  const progresses = ref<Map<number, ProgressData>>(new Map())
+  const progresses = ref<Map<string, ProgressData>>(new Map())
   const getShelfResult = ref<GetShelfResult>()
   const searchResult = ref<SearchResult>()
-  const covers = ref<Map<number, string>>(new Map())
+  const covers = ref<Map<string, string>>(new Map())
 
-  async function loadCover(id: number, url: string) {
+  async function loadCover(id: string, url: string) {
     const result = await commands.getCoverData(url)
     if (result.status === 'error') {
       console.error(result.error)

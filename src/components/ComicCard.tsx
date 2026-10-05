@@ -12,7 +12,7 @@ export default defineComponent({
   name: 'ComicCard',
   props: {
     comicId: {
-      type: Number,
+      type: String,
       required: true,
     },
     comicTitle: {

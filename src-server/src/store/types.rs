@@ -232,10 +232,13 @@ impl DbImageState {
 ///
 /// wnacg 的任务粒度是**整本漫画**（不像 jmcomic 分章节），
 /// 因此主键是 `comic_id`，没有 `chapter_*` 字段。
+///
+/// `comic_id` 类型为 `String` 以对齐 jmcomic/picacomic 的领域模型
+/// ——它们的三级模型是「漫画 → 章节 → 图片」，而 wnacg 没有章节层。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DbTask {
-    pub comic_id: i64,
+    pub comic_id: String,
     pub comic_title: String,
     pub state: DbTaskState,
     pub total_img_count: i64,
@@ -253,7 +256,7 @@ pub struct DbTask {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DbImage {
-    pub comic_id: i64,
+    pub comic_id: String,
     pub img_index: i64,
     pub url: String,
     pub state: DbImageState,
@@ -278,7 +281,9 @@ impl DbTask {
             )
         })?;
         Ok(Self {
-            comic_id: row.get("comic_id")?,
+            // TODO(0d): DB 列改为 TEXT 后，改为 row.get("comic_id")? 直接读 String。
+            // 当前列是 INTEGER PRIMARY KEY（整数亲和性），只能先读 i64 再转。
+            comic_id: row.get::<_, i64>("comic_id")?.to_string(),
             comic_title: row.get("comic_title")?,
             state,
             total_img_count: row.get("total_img_count")?,
@@ -306,7 +311,8 @@ impl DbImage {
             )
         })?;
         Ok(Self {
-            comic_id: row.get("comic_id")?,
+            // TODO(0d): DB 列改为 TEXT 后，改为 row.get("comic_id")? 直接读 String。
+            comic_id: row.get::<_, i64>("comic_id")?.to_string(),
             img_index: row.get("img_index")?,
             url: row.get("url")?,
             state,

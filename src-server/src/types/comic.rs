@@ -17,8 +17,12 @@ use super::{ImgList, Tag};
 #[serde(rename_all = "camelCase")]
 #[allow(clippy::struct_field_names)]
 pub struct Comic {
-    /// 漫画 id
-    pub id: i64,
+    /// 漫画 id。
+    ///
+    /// 对齐 jmcomic/picacomic 的领域模型：它们的 id 都是 `String`。
+    /// wnacg 的 id 取自详情页 `<link href="/feed-index-aid-<id>.html">`，
+    /// 本身就是数字字符串，不再 parse 成 `i64`。
+    pub id: String,
     /// 漫画标题
     pub title: String,
     /// 封面链接
@@ -63,8 +67,7 @@ impl Comic {
             ))?
             .strip_suffix(".html")
             .context(format!("漫画id的<link>不是以`.html`结尾: {link_html}"))?
-            .parse::<i64>()
-            .context(format!("漫画id不是整数: {link_html}"))?;
+            .to_string();
 
         let h2 = document
             .select(&Selector::parse("#bodywrap > h2").to_anyhow()?)

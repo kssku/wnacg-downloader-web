@@ -31,17 +31,17 @@ pub fn filename_filter(s: &str) -> String {
 }
 
 /// 按 id 取漫画详情（含图片列表）。
-pub async fn get_comic(app: &AppContext, comic_id: i64) -> anyhow::Result<Comic> {
+pub async fn get_comic(app: &AppContext, comic_id: String) -> anyhow::Result<Comic> {
     let img_list = app
         .get_wnacg_client()
-        .get_img_list(comic_id)
+        .get_img_list(&comic_id)
         .await
         .context("获取图片列表失败")?;
     // `WnacgClient::get_comic` 内部已经完成 HTML 解析并返回 `Comic`，
     // 这里只需把单独取回的 `img_list` 合进去，不能再走一次 `from_html`。
     let mut comic = app
         .get_wnacg_client()
-        .get_comic(comic_id)
+        .get_comic(&comic_id)
         .await
         .context("获取漫画详情失败")?;
     comic.img_list = img_list;
@@ -52,7 +52,7 @@ pub async fn get_comic(app: &AppContext, comic_id: i64) -> anyhow::Result<Comic>
 ///
 /// 走的是每本漫画目录下的 `元数据.json`，所以即使用户改了目录命名格式，
 /// 也能正确定位已下载的漫画。
-pub fn create_id_to_dir_map(app: &AppContext) -> anyhow::Result<std::collections::HashMap<i64, std::path::PathBuf>> {
+pub fn create_id_to_dir_map(app: &AppContext) -> anyhow::Result<std::collections::HashMap<String, std::path::PathBuf>> {
     let mut id_to_dir_map = std::collections::HashMap::new();
     let download_dir = app.get_config().read().download_dir.clone();
     if !download_dir.exists() {
@@ -74,7 +74,8 @@ pub fn create_id_to_dir_map(app: &AppContext) -> anyhow::Result<std::collections
             .context(format!("将`{}`反序列化为serde_json::Value失败", path.display()))?;
         let id = comic_json
             .get("id")
-            .and_then(|id| id.as_i64())
+            .and_then(|id| id.as_str())
+            .map(str::to_string)
             .context(format!("`{path:?}`没有`id`字段"))?;
 
         let parent = path

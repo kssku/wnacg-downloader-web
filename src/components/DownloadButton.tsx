@@ -20,7 +20,7 @@ export default defineComponent({
       default: 'medium',
     },
     comicId: {
-      type: Number,
+      type: String,
       required: true,
     },
     comicDownloaded: {

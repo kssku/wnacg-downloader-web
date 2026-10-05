@@ -8,7 +8,7 @@ export default defineComponent({
   setup() {
     const store = useStore()
 
-    const completedProgresses = computed<[number, ProgressData][]>(() =>
+    const completedProgresses = computed<[string, ProgressData][]>(() =>
       Array.from(store.progresses.entries())
         .filter(([, { state }]) => state === 'Completed')
         .sort((a, b) => {

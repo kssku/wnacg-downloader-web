@@ -143,7 +143,7 @@ pub async fn search_by_tag(
     Ok(search_result)
 }
 
-pub async fn get_comic(app: &AppContext, id: i64) -> CommandResult<Comic> {
+pub async fn get_comic(app: &AppContext, id: &str) -> CommandResult<Comic> {
     let wnacg_client = app.wnacg_client();
 
     let comic = wnacg_client
@@ -178,7 +178,7 @@ pub fn create_download_task(app: &AppContext, comic: Comic) {
     download_manager.create_download_task(comic);
 }
 
-pub fn pause_download_task(app: &AppContext, comic_id: i64) -> CommandResult<()> {
+pub fn pause_download_task(app: &AppContext, comic_id: &str) -> CommandResult<()> {
     let download_manager = app.download_manager();
     download_manager
         .pause_download_task(comic_id)
@@ -187,7 +187,7 @@ pub fn pause_download_task(app: &AppContext, comic_id: i64) -> CommandResult<()>
     Ok(())
 }
 
-pub fn resume_download_task(app: &AppContext, comic_id: i64) -> CommandResult<()> {
+pub fn resume_download_task(app: &AppContext, comic_id: &str) -> CommandResult<()> {
     let download_manager = app.download_manager();
     download_manager
         .resume_download_task(comic_id)
@@ -196,7 +196,7 @@ pub fn resume_download_task(app: &AppContext, comic_id: i64) -> CommandResult<()
     Ok(())
 }
 
-pub fn cancel_download_task(app: &AppContext, comic_id: i64) -> CommandResult<()> {
+pub fn cancel_download_task(app: &AppContext, comic_id: &str) -> CommandResult<()> {
     let download_manager = app.download_manager();
     download_manager
         .cancel_download_task(comic_id)
@@ -418,10 +418,10 @@ pub async fn download_shelf(app: &AppContext, shelf_id: i64) -> CommandResult<()
     let interval_ms = config.read().download_shelf_interval_ms;
     for (i, shelf_comic) in shelf_comics.into_iter().enumerate() {
         let comic_title = &shelf_comic.title;
-        let comic_id = shelf_comic.id;
+        let comic_id = shelf_comic.id.clone();
 
         let comic = match wnacg_client
-            .get_comic(comic_id)
+            .get_comic(&comic_id)
             .await
             .context(format!("获取ID为`{comic_id}`的漫画失败"))
         {

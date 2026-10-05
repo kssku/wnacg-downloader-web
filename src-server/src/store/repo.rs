@@ -9,6 +9,19 @@ use serde::{Deserialize, Serialize};
 
 use super::types::{now_ts, DbImage, DbTask, DbTaskState, Store};
 
+/// 把应用层的 `comic_id: &str` 转成 DB 层的整数。
+///
+/// TODO(0d): DB 列改为 TEXT 后，删除这层转换。
+/// 当前 `download_task.comic_id` / `download_image.comic_id` 仍是
+/// `INTEGER PRIMARY KEY`（整数亲和性），绑定字符串会被存成整数、
+/// 读回 String 会失败。这是「类型统一先行、DB schema 后改」的临时兼容层，
+/// 只在 repo 的 DB 边界出现，调用方无感知。
+fn db_comic_id(comic_id: &str) -> anyhow::Result<i64> {
+    comic_id
+        .parse::<i64>()
+        .with_context(|| format!("comic_id 不是整数（0d 迁移前 DB 列仍是 INTEGER）: {comic_id}"))
+}
+
 /// 任务列表的聚合统计，给前端顶部卡片用。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,7 +46,9 @@ impl TaskRepo {
     ///
     /// **不覆盖 `state` / 进度 / 错误**：重下同一本漫画时，
     /// 那些字段由下载过程自己按步推进，这里只负责标题和目录快照。
-    pub fn upsert_new(store: &Store, comic_id: i64, title: &str, dir: &str) -> anyhow::Result<()> {
+    pub fn upsert_new(store: &Store, comic_id: &str, title: &str, dir: &str) -> anyhow::Result<()> {
+        // TODO(0d): DB 列改为 TEXT 后删除。
+        let comic_id = db_comic_id(comic_id)?;
         let now = now_ts();
         store.with_conn(|conn| {
             conn.execute(
@@ -54,7 +69,9 @@ impl TaskRepo {
     }
 
     /// 从列表里移除任务（连同图片明细）。
-    pub fn delete(store: &Store, comic_id: i64) -> anyhow::Result<()> {
+    pub fn delete(store: &Store, comic_id: &str) -> anyhow::Result<()> {
+        // TODO(0d): DB 列改为 TEXT 后删除。
+        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             conn.execute(
                 "DELETE FROM download_task WHERE comic_id = ?1",
@@ -77,10 +94,12 @@ impl TaskRepo {
     /// 设置任务状态，并顺带记错误信息。
     pub fn set_state(
         store: &Store,
-        comic_id: i64,
+        comic_id: &str,
         state: DbTaskState,
         err: Option<&str>,
     ) -> anyhow::Result<()> {
+        // TODO(0d): DB 列改为 TEXT 后删除。
+        let comic_id = db_comic_id(comic_id)?;
         let now = now_ts();
         store.with_conn(|conn| {
             conn.execute(
@@ -95,7 +114,9 @@ impl TaskRepo {
     }
 
     /// 更新重试次数。
-    pub fn set_retry_count(store: &Store, comic_id: i64, retry_count: i64) -> anyhow::Result<()> {
+    pub fn set_retry_count(store: &Store, comic_id: &str, retry_count: i64) -> anyhow::Result<()> {
+        // TODO(0d): DB 列改为 TEXT 后删除。
+        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             conn.execute(
                 "UPDATE download_task SET retry_count = ?2, updated_at = ?3 WHERE comic_id = ?1",
@@ -109,9 +130,11 @@ impl TaskRepo {
     /// 记录图片总数（拿到 `ImgList` 之后调用一次）。
     pub fn set_total_img_count(
         store: &Store,
-        comic_id: i64,
+        comic_id: &str,
         total: i64,
     ) -> anyhow::Result<()> {
+        // TODO(0d): DB 列改为 TEXT 后删除。
+        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             conn.execute(
                 "UPDATE download_task
@@ -128,7 +151,9 @@ impl TaskRepo {
     ///
     /// 只有在批量重算（比如重下完成、恢复核对文件系统）时才用；
     /// 单张图片完成走 [`ImageRepo::mark_done`]，那里是原子自增。
-    pub fn set_progress(store: &Store, comic_id: i64, done: i64) -> anyhow::Result<()> {
+    pub fn set_progress(store: &Store, comic_id: &str, done: i64) -> anyhow::Result<()> {
+        // TODO(0d): DB 列改为 TEXT 后删除。
+        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             conn.execute(
                 "UPDATE download_task
@@ -142,7 +167,9 @@ impl TaskRepo {
     }
 
     /// 按主键读一行。
-    pub fn get(store: &Store, comic_id: i64) -> anyhow::Result<Option<DbTask>> {
+    pub fn get(store: &Store, comic_id: &str) -> anyhow::Result<Option<DbTask>> {
+        // TODO(0d): DB 列改为 TEXT 后删除。
+        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             let mut stmt = conn
                 .prepare("SELECT * FROM download_task WHERE comic_id = ?1")
@@ -244,9 +271,11 @@ impl ImageRepo {
     /// 这是断点续传不重下的关键。
     pub fn insert_many(
         store: &Store,
-        comic_id: i64,
+        comic_id: &str,
         urls: &[String],
     ) -> anyhow::Result<()> {
+        // TODO(0d): DB 列改为 TEXT 后删除。
+        let comic_id = db_comic_id(comic_id)?;
         let now = now_ts();
         store.with_tx(|tx| {
             let mut stmt = tx
@@ -272,10 +301,12 @@ impl ImageRepo {
     /// 那会让恢复逻辑把已完成的任务当成未完成。
     pub fn mark_done(
         store: &Store,
-        comic_id: i64,
+        comic_id: &str,
         img_index: i64,
         bytes: Option<i64>,
     ) -> anyhow::Result<()> {
+        // TODO(0d): DB 列改为 TEXT 后删除。
+        let comic_id = db_comic_id(comic_id)?;
         let now = now_ts();
         store.with_tx(|tx| {
             let changed = tx
@@ -307,10 +338,12 @@ impl ImageRepo {
     /// 标记单张图片失败并记原因。
     pub fn mark_failed(
         store: &Store,
-        comic_id: i64,
+        comic_id: &str,
         img_index: i64,
         err: &str,
     ) -> anyhow::Result<()> {
+        // TODO(0d): DB 列改为 TEXT 后删除。
+        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             conn.execute(
                 r#"
@@ -331,7 +364,9 @@ impl ImageRepo {
     /// 列出某本漫画所有**未完成**的图片下标，按顺序返回。
     ///
     /// 恢复时用它决定要重下哪些，而不是「整本重下」。
-    pub fn list_pending_indexes(store: &Store, comic_id: i64) -> anyhow::Result<Vec<i64>> {
+    pub fn list_pending_indexes(store: &Store, comic_id: &str) -> anyhow::Result<Vec<i64>> {
+        // TODO(0d): DB 列改为 TEXT 后删除。
+        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
@@ -352,7 +387,9 @@ impl ImageRepo {
     }
 
     /// 列出某本漫画的全部图片行。
-    pub fn list(store: &Store, comic_id: i64) -> anyhow::Result<Vec<DbImage>> {
+    pub fn list(store: &Store, comic_id: &str) -> anyhow::Result<Vec<DbImage>> {
+        // TODO(0d): DB 列改为 TEXT 后删除。
+        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
@@ -371,7 +408,9 @@ impl ImageRepo {
     }
 
     /// 数已完成张数。恢复时用来和任务里的计数对账。
-    pub fn count_done(store: &Store, comic_id: i64) -> anyhow::Result<i64> {
+    pub fn count_done(store: &Store, comic_id: &str) -> anyhow::Result<i64> {
+        // TODO(0d): DB 列改为 TEXT 后删除。
+        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             let count: i64 = conn
                 .query_row(
@@ -385,7 +424,9 @@ impl ImageRepo {
     }
 
     /// 清空一本漫画的图片记录（重下前调用）。
-    pub fn clear(store: &Store, comic_id: i64) -> anyhow::Result<()> {
+    pub fn clear(store: &Store, comic_id: &str) -> anyhow::Result<()> {
+        // TODO(0d): DB 列改为 TEXT 后删除。
+        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             conn.execute(
                 "DELETE FROM download_image WHERE comic_id = ?1",
@@ -402,7 +443,17 @@ mod tests {
     use super::*;
 
     fn store() -> Store {
-        let dir = std::env::temp_dir().join(format!("wnacg-repo-test-{}", now_ts()));
+        // 用进程内自增计数而不是时间戳：`now_ts()` 只有秒级精度，
+        // 同一秒内启动的多个测试会拿到同一个目录，互相看到对方的数据。
+        // （并行和串行都会踩到，只是表现不同：串行是数据串台，
+        // 并行还多一个 database is locked。）
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "wnacg-repo-test-{}-{}",
+            std::process::id(),
+            n
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         Store::open(&dir.join("test.db")).unwrap()
     }
@@ -414,15 +465,15 @@ mod tests {
     #[test]
     fn upsert_keeps_progress_on_reinsert() {
         let s = store();
-        TaskRepo::upsert_new(&s, 1, "标题", "/downloads/1").unwrap();
-        TaskRepo::set_total_img_count(&s, 1, 10).unwrap();
-        TaskRepo::set_progress(&s, 1, 4).unwrap();
-        TaskRepo::set_state(&s, 1, DbTaskState::Downloading, None).unwrap();
+        TaskRepo::upsert_new(&s, "1", "标题", "/downloads/1").unwrap();
+        TaskRepo::set_total_img_count(&s, "1", 10).unwrap();
+        TaskRepo::set_progress(&s, "1", 4).unwrap();
+        TaskRepo::set_state(&s, "1", DbTaskState::Downloading, None).unwrap();
 
         // 重下同一本：标题/目录可以更新，进度和状态不能被打回原形。
-        TaskRepo::upsert_new(&s, 1, "新标题", "/downloads/2").unwrap();
+        TaskRepo::upsert_new(&s, "1", "新标题", "/downloads/2").unwrap();
 
-        let task = TaskRepo::get(&s, 1).unwrap().unwrap();
+        let task = TaskRepo::get(&s, "1").unwrap().unwrap();
         assert_eq!(task.comic_title, "新标题");
         assert_eq!(task.download_dir, "/downloads/2");
         assert_eq!(task.done_img_count, 4, "进度被重置了");
@@ -432,43 +483,43 @@ mod tests {
     #[test]
     fn mark_done_is_idempotent_for_counter() {
         let s = store();
-        TaskRepo::upsert_new(&s, 1, "标题", "/d").unwrap();
-        TaskRepo::set_total_img_count(&s, 1, 3).unwrap();
-        ImageRepo::insert_many(&s, 1, &urls(3)).unwrap();
+        TaskRepo::upsert_new(&s, "1", "标题", "/d").unwrap();
+        TaskRepo::set_total_img_count(&s, "1", 3).unwrap();
+        ImageRepo::insert_many(&s, "1", &urls(3)).unwrap();
 
-        ImageRepo::mark_done(&s, 1, 0, Some(100)).unwrap();
-        ImageRepo::mark_done(&s, 1, 0, Some(100)).unwrap();
+        ImageRepo::mark_done(&s, "1", 0, Some(100)).unwrap();
+        ImageRepo::mark_done(&s, "1", 0, Some(100)).unwrap();
 
-        let task = TaskRepo::get(&s, 1).unwrap().unwrap();
+        let task = TaskRepo::get(&s, "1").unwrap().unwrap();
         assert_eq!(task.done_img_count, 1, "重复标记把计数顶高了");
-        assert_eq!(ImageRepo::count_done(&s, 1).unwrap(), 1);
+        assert_eq!(ImageRepo::count_done(&s, "1").unwrap(), 1);
     }
 
     #[test]
     fn insert_many_does_not_reset_done_images() {
         let s = store();
-        TaskRepo::upsert_new(&s, 1, "标题", "/d").unwrap();
-        ImageRepo::insert_many(&s, 1, &urls(3)).unwrap();
-        ImageRepo::mark_done(&s, 1, 1, None).unwrap();
+        TaskRepo::upsert_new(&s, "1", "标题", "/d").unwrap();
+        ImageRepo::insert_many(&s, "1", &urls(3)).unwrap();
+        ImageRepo::mark_done(&s, "1", 1, None).unwrap();
 
         // 模拟恢复时重新登记：已完成的第 1 张必须保持 done。
-        ImageRepo::insert_many(&s, 1, &urls(3)).unwrap();
+        ImageRepo::insert_many(&s, "1", &urls(3)).unwrap();
 
-        let pending = ImageRepo::list_pending_indexes(&s, 1).unwrap();
+        let pending = ImageRepo::list_pending_indexes(&s, "1").unwrap();
         assert_eq!(pending, vec![0, 2], "已完成的图片被重置成待下载了");
     }
 
     #[test]
     fn stats_aggregates_all_states() {
         let s = store();
-        TaskRepo::upsert_new(&s, 1, "A", "/d").unwrap();
-        TaskRepo::upsert_new(&s, 2, "B", "/d").unwrap();
-        TaskRepo::upsert_new(&s, 3, "C", "/d").unwrap();
-        TaskRepo::set_state(&s, 1, DbTaskState::Completed, None).unwrap();
-        TaskRepo::set_state(&s, 2, DbTaskState::Failed, Some("超时")).unwrap();
-        TaskRepo::set_state(&s, 3, DbTaskState::Downloading, None).unwrap();
-        TaskRepo::set_total_img_count(&s, 1, 10).unwrap();
-        TaskRepo::set_progress(&s, 1, 10).unwrap();
+        TaskRepo::upsert_new(&s, "1", "A", "/d").unwrap();
+        TaskRepo::upsert_new(&s, "2", "B", "/d").unwrap();
+        TaskRepo::upsert_new(&s, "3", "C", "/d").unwrap();
+        TaskRepo::set_state(&s, "1", DbTaskState::Completed, None).unwrap();
+        TaskRepo::set_state(&s, "2", DbTaskState::Failed, Some("超时")).unwrap();
+        TaskRepo::set_state(&s, "3", DbTaskState::Downloading, None).unwrap();
+        TaskRepo::set_total_img_count(&s, "1", 10).unwrap();
+        TaskRepo::set_progress(&s, "1", 10).unwrap();
 
         let st = TaskRepo::stats(&s).unwrap();
         assert_eq!(st.total, 3);
@@ -484,47 +535,47 @@ mod tests {
     fn resumable_excludes_paused_and_cancelled() {
         let s = store();
         for id in 1..=5 {
-            TaskRepo::upsert_new(&s, id, "T", "/d").unwrap();
+            TaskRepo::upsert_new(&s, &id.to_string(), "T", "/d").unwrap();
         }
-        TaskRepo::set_state(&s, 1, DbTaskState::Pending, None).unwrap();
-        TaskRepo::set_state(&s, 2, DbTaskState::Downloading, None).unwrap();
-        TaskRepo::set_state(&s, 3, DbTaskState::Failed, None).unwrap();
-        TaskRepo::set_state(&s, 4, DbTaskState::Paused, None).unwrap();
-        TaskRepo::set_state(&s, 5, DbTaskState::Cancelled, None).unwrap();
+        TaskRepo::set_state(&s, "1", DbTaskState::Pending, None).unwrap();
+        TaskRepo::set_state(&s, "2", DbTaskState::Downloading, None).unwrap();
+        TaskRepo::set_state(&s, "3", DbTaskState::Failed, None).unwrap();
+        TaskRepo::set_state(&s, "4", DbTaskState::Paused, None).unwrap();
+        TaskRepo::set_state(&s, "5", DbTaskState::Cancelled, None).unwrap();
 
-        let ids: Vec<i64> = TaskRepo::list_resumable(&s)
+        let ids: Vec<String> = TaskRepo::list_resumable(&s)
             .unwrap()
             .into_iter()
             .map(|t| t.comic_id)
             .collect();
         assert_eq!(ids.len(), 3, "恢复集合应只含 pending/downloading/failed");
-        assert!(!ids.contains(&4), "暂停任务被自动恢复了");
-        assert!(!ids.contains(&5), "已取消任务被自动恢复了");
+        assert!(!ids.contains(&"4".to_string()), "暂停任务被自动恢复了");
+        assert!(!ids.contains(&"5".to_string()), "已取消任务被自动恢复了");
     }
 
     #[test]
     fn delete_cascades_to_images() {
         let s = store();
-        TaskRepo::upsert_new(&s, 7, "T", "/d").unwrap();
-        ImageRepo::insert_many(&s, 7, &urls(4)).unwrap();
+        TaskRepo::upsert_new(&s, "7", "T", "/d").unwrap();
+        ImageRepo::insert_many(&s, "7", &urls(4)).unwrap();
 
-        TaskRepo::delete(&s, 7).unwrap();
+        TaskRepo::delete(&s, "7").unwrap();
 
-        assert!(TaskRepo::get(&s, 7).unwrap().is_none());
-        assert!(ImageRepo::list(&s, 7).unwrap().is_empty(), "图片明细未级联删除");
+        assert!(TaskRepo::get(&s, "7").unwrap().is_none());
+        assert!(ImageRepo::list(&s, "7").unwrap().is_empty(), "图片明细未级联删除");
     }
 
     #[test]
     fn mark_failed_bumps_retry_count() {
         let s = store();
-        TaskRepo::upsert_new(&s, 1, "T", "/d").unwrap();
-        ImageRepo::insert_many(&s, 1, &urls(1)).unwrap();
+        TaskRepo::upsert_new(&s, "1", "T", "/d").unwrap();
+        ImageRepo::insert_many(&s, "1", &urls(1)).unwrap();
 
-        ImageRepo::mark_failed(&s, 1, 0, "连接超时").unwrap();
-        ImageRepo::mark_failed(&s, 1, 0, "连接超时").unwrap();
+        ImageRepo::mark_failed(&s, "1", 0, "连接超时").unwrap();
+        ImageRepo::mark_failed(&s, "1", 0, "连接超时").unwrap();
 
-        let img = &ImageRepo::list(&s, 1).unwrap()[0];
-        assert_eq!(img.state, DbImageState::Failed);
+        let img = &ImageRepo::list(&s, "1").unwrap()[0];
+        assert_eq!(img.state, crate::store::DbImageState::Failed);
         assert_eq!(img.retry_count, 2);
         assert_eq!(img.last_error.as_deref(), Some("连接超时"));
     }

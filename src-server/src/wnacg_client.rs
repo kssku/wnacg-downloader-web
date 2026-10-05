@@ -176,7 +176,7 @@ impl WnacgClient {
         Ok(search_result)
     }
 
-    pub async fn get_img_list(&self, id: i64) -> anyhow::Result<ImgList> {
+    pub async fn get_img_list(&self, id: &str) -> anyhow::Result<ImgList> {
         let api_domain = self.get_api_domain();
         let url = format!("https://{api_domain}/photos-gallery-aid-{id}.html");
         let request = self
@@ -214,7 +214,7 @@ impl WnacgClient {
         Ok(img_list)
     }
 
-    pub async fn get_comic(&self, id: i64) -> anyhow::Result<Comic> {
+    pub async fn get_comic(&self, id: &str) -> anyhow::Result<Comic> {
         let api_domain = self.get_api_domain();
         let request = self
             .api_client

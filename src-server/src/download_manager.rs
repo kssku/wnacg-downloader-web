@@ -50,7 +50,7 @@ pub struct DownloadManager {
     comic_sem: Arc<Semaphore>,
     img_sem: Arc<Semaphore>,
     byte_per_sec: Arc<AtomicU64>,
-    download_tasks: Arc<RwLock<HashMap<i64, DownloadTask>>>,
+    download_tasks: Arc<RwLock<HashMap<String, DownloadTask>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,7 +110,7 @@ impl DownloadManager {
 
     pub fn create_download_task(&self, comic: Comic) {
         use DownloadTaskState::{Downloading, Paused, Pending};
-        let comic_id = comic.id;
+        let comic_id = comic.id.clone();
         let mut tasks = self.download_tasks.write();
         if let Some(task) = tasks.get(&comic_id) {
             // 如果任务已经存在，且状态是`Pending`、`Downloading`或`Paused`，则不创建新任务
@@ -124,20 +124,20 @@ impl DownloadManager {
         tasks.insert(comic_id, task);
     }
 
-    pub fn pause_download_task(&self, comic_id: i64) -> anyhow::Result<()> {
+    pub fn pause_download_task(&self, comic_id: &str) -> anyhow::Result<()> {
         let tasks = self.download_tasks.read();
-        let Some(task) = tasks.get(&comic_id) else {
+        let Some(task) = tasks.get(comic_id) else {
             return Err(anyhow!("未找到漫画ID为`{comic_id}`的下载任务"));
         };
         task.set_state(DownloadTaskState::Paused);
         Ok(())
     }
 
-    pub fn resume_download_task(&self, comic_id: i64) -> anyhow::Result<()> {
+    pub fn resume_download_task(&self, comic_id: &str) -> anyhow::Result<()> {
         use DownloadTaskState::{Cancelled, Completed, Failed, Pending};
         let comic = {
             let tasks = self.download_tasks.read();
-            let Some(task) = tasks.get(&comic_id) else {
+            let Some(task) = tasks.get(comic_id) else {
                 return Err(anyhow!("未找到漫画ID为`{comic_id}`的下载任务"));
             };
             let task_state = *task.state_sender.borrow();
@@ -157,9 +157,9 @@ impl DownloadManager {
         Ok(())
     }
 
-    pub fn cancel_download_task(&self, comic_id: i64) -> anyhow::Result<()> {
+    pub fn cancel_download_task(&self, comic_id: &str) -> anyhow::Result<()> {
         let tasks = self.download_tasks.read();
-        let Some(task) = tasks.get(&comic_id) else {
+        let Some(task) = tasks.get(comic_id) else {
             return Err(anyhow!("未找到漫画ID为`{comic_id}`的下载任务"));
         };
         task.set_state(DownloadTaskState::Cancelled);
@@ -167,9 +167,9 @@ impl DownloadManager {
     }
 
     /// 删除任务记录（`delete_download_task` 命令用）。
-    pub fn remove_download_task(&self, comic_id: i64) -> anyhow::Result<()> {
+    pub fn remove_download_task(&self, comic_id: &str) -> anyhow::Result<()> {
         let mut tasks = self.download_tasks.write();
-        let Some(task) = tasks.remove(&comic_id) else {
+        let Some(task) = tasks.remove(comic_id) else {
             return Err(anyhow!("未找到漫画ID为`{comic_id}`的下载任务"));
         };
         // 先置为取消，让正在跑的任务自己停下来，再发 Deleted 事件让前端移除。
@@ -259,7 +259,7 @@ impl DownloadTask {
 
     #[allow(clippy::cast_possible_truncation)]
     async fn download_comic(&self) {
-        let comic_id = self.comic.id;
+        let comic_id = self.comic.id.clone();
         let comic_title = &self.comic.title;
         // 获取此漫画每张图片的下载链接
         let img_urls = self
@@ -340,7 +340,7 @@ impl DownloadTask {
     }
 
     fn create_temp_download_dir(&self) -> Option<PathBuf> {
-        let comic_id = self.comic.id;
+        let comic_id = self.comic.id.clone();
         let comic_title = &self.comic.title;
 
         let temp_download_dir = self
@@ -377,7 +377,7 @@ impl DownloadTask {
 
     /// 删除临时下载目录中与`config.download_format`对不上的文件
     fn clean_temp_download_dir(&self, temp_download_dir: &Path) {
-        let comic_id = self.comic.id;
+        let comic_id = self.comic.id.clone();
         let comic_title = &self.comic.title;
 
         let entries = match std::fs::read_dir(temp_download_dir).map_err(anyhow::Error::from) {
@@ -425,7 +425,7 @@ impl DownloadTask {
         &'a self,
         permit: &mut Option<SemaphorePermit<'a>>,
     ) -> ControlFlow<()> {
-        let comic_id = self.comic.id;
+        let comic_id = self.comic.id.clone();
         let comic_title = &self.comic.title;
 
         tracing::debug!(comic_id, comic_title, "漫画开始排队");
@@ -479,7 +479,7 @@ impl DownloadTask {
         permit: &mut Option<SemaphorePermit<'a>>,
         state_receiver: &mut watch::Receiver<DownloadTaskState>,
     ) -> ControlFlow<()> {
-        let comic_id = self.comic.id;
+        let comic_id = self.comic.id.clone();
         let comic_title = &self.comic.title;
 
         self.emit_download_task_event();
@@ -501,14 +501,14 @@ impl DownloadTask {
     }
 
     async fn sleep_between_comics(&self) {
-        let comic_id = self.comic.id;
+        let comic_id = self.comic.id.clone();
         let mut remaining_sec = self.app.get_config().read().comic_download_interval_sec;
         while remaining_sec > 0 {
             // 发送章节休眠事件
             let _ = self.app.events().emit(
                 topics::DOWNLOAD_SLEEPING,
                 &DownloadSleepingEvent {
-                    comic_id,
+                    comic_id: comic_id.clone(),
                     remaining_sec,
                 },
             );
@@ -550,7 +550,7 @@ impl DownloadTask {
         let _ = self.app.events().emit(
             topics::DOWNLOAD_TASK_DELETED,
             &DownloadTaskDeletedEvent {
-                comic_id: self.comic.id,
+                comic_id: self.comic.id.clone(),
             },
         );
     }
@@ -655,7 +655,7 @@ impl DownloadImgTask {
 
     async fn download_img(&self) {
         let url = &self.url;
-        let comic_id = self.download_task.comic.id;
+        let comic_id = self.download_task.comic.id.clone();
         let comic_title = &self.download_task.comic.title;
         let temp_download_dir = &self.temp_download_dir;
 
@@ -774,7 +774,7 @@ impl DownloadImgTask {
         permit: &mut Option<SemaphorePermit<'a>>,
     ) -> ControlFlow<()> {
         let url = &self.url;
-        let comic_id = self.download_task.comic.id;
+        let comic_id = self.download_task.comic.id.clone();
         let comic_title = &self.download_task.comic.title;
 
         tracing::trace!(comic_id, comic_title, url, "图片开始排队");
@@ -808,7 +808,7 @@ impl DownloadImgTask {
         state_receiver: &mut watch::Receiver<DownloadTaskState>,
     ) -> ControlFlow<()> {
         let url = &self.url;
-        let comic_id = self.download_task.comic.id;
+        let comic_id = self.download_task.comic.id.clone();
         let comic_title = &self.download_task.comic.title;
 
         let state = *state_receiver.borrow();

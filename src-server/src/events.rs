@@ -34,7 +34,7 @@ pub struct DownloadTaskEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadTaskDeletedEvent {
-    pub comic_id: i64,
+    pub comic_id: String,
 }
 
 /// 下载速度事件（每秒一次）。
@@ -48,7 +48,7 @@ pub struct DownloadSpeedEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadSleepingEvent {
-    pub comic_id: i64,
+    pub comic_id: String,
     pub remaining_sec: u64,
 }
 

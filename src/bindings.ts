@@ -83,7 +83,7 @@ export type ImgInImgList = { caption: string; url: string };
 export type ImgList = ImgInImgList[];
 
 export type Comic = {
-  id: number;
+  id: string;
   title: string;
   cover: string;
   category: string;
@@ -95,7 +95,7 @@ export type Comic = {
 };
 
 export type ComicInSearch = {
-  id: number;
+  id: string;
   titleHtml: string;
   title: string;
   cover: string;
@@ -106,7 +106,7 @@ export type ComicInSearch = {
 export type Shelf = { id: number; name: string };
 
 export type ComicInShelf = {
-  id: number;
+  id: string;
   title: string;
   cover: string;
   favoriteTime: string;
@@ -148,10 +148,10 @@ export type DownloadTaskEvent = {
 };
 
 /** 任务被删除时后端单独发的信号。 */
-export type DownloadTaskDeletedEvent = { comicId: number };
+export type DownloadTaskDeletedEvent = { comicId: string };
 
 export type DownloadSpeedEvent = { speed: string };
-export type DownloadSleepingEvent = { comicId: number; remainingSec: number };
+export type DownloadSleepingEvent = { comicId: string; remainingSec: number };
 
 export type DownloadShelfEvent =
   | { event: "GettingShelfComics" }
@@ -290,7 +290,7 @@ export const commands = {
     return await callResult<SearchResult>(() => post("/api/search/tag", { tagName, pageNum }));
   },
 
-  async getComic(id: number): Promise<Result<Comic, CommandError>> {
+  async getComic(id: string): Promise<Result<Comic, CommandError>> {
     return await callResult<Comic>(() => get(`/api/comic/${id}`));
   },
 
@@ -307,15 +307,15 @@ export const commands = {
     await callDirect<null>(() => post("/api/download/task", { comic }));
   },
 
-  async pauseDownloadTask(comicId: number): Promise<Result<null, CommandError>> {
+  async pauseDownloadTask(comicId: string): Promise<Result<null, CommandError>> {
     return await callResult<null>(() => post(`/api/download/task/${comicId}/pause`));
   },
 
-  async resumeDownloadTask(comicId: number): Promise<Result<null, CommandError>> {
+  async resumeDownloadTask(comicId: string): Promise<Result<null, CommandError>> {
     return await callResult<null>(() => post(`/api/download/task/${comicId}/resume`));
   },
 
-  async cancelDownloadTask(comicId: number): Promise<Result<null, CommandError>> {
+  async cancelDownloadTask(comicId: string): Promise<Result<null, CommandError>> {
     return await callResult<null>(() => post(`/api/download/task/${comicId}/cancel`));
   },
 

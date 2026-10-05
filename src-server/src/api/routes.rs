@@ -239,14 +239,14 @@ async fn post_search_by_tag(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ComicIdRequest {
-    comic_id: i64,
+    comic_id: String,
 }
 
 async fn get_comic(
     State(state): State<AppState>,
-    Path(comic_id): Path<i64>,
+    Path(comic_id): Path<String>,
 ) -> Result<Json<Comic>, ApiError> {
-    let comic = commands::get_comic(&state.app, comic_id)
+    let comic = commands::get_comic(&state.app, &comic_id)
         .await
         .map_err(ApiError::from)?;
     Ok(Json(comic))
@@ -257,7 +257,7 @@ async fn post_comic(
     State(state): State<AppState>,
     Json(req): Json<ComicIdRequest>,
 ) -> Result<Json<Comic>, ApiError> {
-    let comic = commands::get_comic(&state.app, req.comic_id)
+    let comic = commands::get_comic(&state.app, &req.comic_id)
         .await
         .map_err(ApiError::from)?;
     Ok(Json(comic))
@@ -326,33 +326,33 @@ async fn create_download_task(
 
 async fn pause_download_task(
     State(state): State<AppState>,
-    Path(comic_id): Path<i64>,
+    Path(comic_id): Path<String>,
 ) -> Result<Json<()>, ApiError> {
     handle!(
         "暂停下载任务失败",
-        commands::pause_download_task(&state.app, comic_id)
+        commands::pause_download_task(&state.app, &comic_id)
     )?;
     Ok(Json(()))
 }
 
 async fn resume_download_task(
     State(state): State<AppState>,
-    Path(comic_id): Path<i64>,
+    Path(comic_id): Path<String>,
 ) -> Result<Json<()>, ApiError> {
     handle!(
         "继续下载任务失败",
-        commands::resume_download_task(&state.app, comic_id)
+        commands::resume_download_task(&state.app, &comic_id)
     )?;
     Ok(Json(()))
 }
 
 async fn cancel_download_task(
     State(state): State<AppState>,
-    Path(comic_id): Path<i64>,
+    Path(comic_id): Path<String>,
 ) -> Result<Json<()>, ApiError> {
     handle!(
         "取消下载任务失败",
-        commands::cancel_download_task(&state.app, comic_id)
+        commands::cancel_download_task(&state.app, &comic_id)
     )?;
     Ok(Json(()))
 }
@@ -556,10 +556,10 @@ async fn task_stats(
 
 async fn get_task(
     State(state): State<AppState>,
-    Path(comic_id): Path<i64>,
+    Path(comic_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let store = state.app.store();
-    let task = TaskRepo::get(&store, comic_id)
+    let task = TaskRepo::get(&store, &comic_id)
         .map_err(|err| ApiError(CommandError::from("查询任务失败", err)))?;
 
     match task {
@@ -573,35 +573,35 @@ async fn get_task(
 
 async fn delete_task(
     State(state): State<AppState>,
-    Path(comic_id): Path<i64>,
+    Path(comic_id): Path<String>,
 ) -> Result<Json<()>, ApiError> {
     let store = state.app.store();
-    TaskRepo::delete(&store, comic_id)
+    TaskRepo::delete(&store, &comic_id)
         .map_err(|err| ApiError(CommandError::from("删除任务失败", err)))?;
     Ok(Json(()))
 }
 
 async fn retry_task(
     State(state): State<AppState>,
-    Path(comic_id): Path<i64>,
+    Path(comic_id): Path<String>,
 ) -> Result<Json<()>, ApiError> {
     let store = state.app.store();
 
     // 「重试」= 把任务打回 pending、清掉错误、把失败/未完成的图片重置，
     // 然后交给下载管理器重新排队。图片级的 done 状态保留，实现断点续传。
-    TaskRepo::set_state(&store, comic_id, DbTaskState::Pending, None)
+    TaskRepo::set_state(&store, &comic_id, DbTaskState::Pending, None)
         .map_err(|err| ApiError(CommandError::from("重试任务失败", err)))?;
-    TaskRepo::set_retry_count(&store, comic_id, 0)
+    TaskRepo::set_retry_count(&store, &comic_id, 0)
         .map_err(|err| ApiError(CommandError::from("重试任务失败", err)))?;
 
-    let pending = ImageRepo::list_pending_indexes(&store, comic_id)
+    let pending = ImageRepo::list_pending_indexes(&store, &comic_id)
         .map_err(|err| ApiError(CommandError::from("重试任务失败", err)))?;
     tracing::info!("任务 {comic_id} 重新排队，待下载图片 {} 张", pending.len());
 
     state
         .app
         .download_manager()
-        .resume_download_task(comic_id)
+        .resume_download_task(&comic_id)
         .map_err(|err| ApiError(CommandError::from("重试任务失败", err)))?;
 
     Ok(Json(()))
@@ -634,7 +634,7 @@ async fn purge_tasks(
 
     let mut removed = 0_u64;
     for task in all {
-        TaskRepo::delete(&store, task.comic_id)
+        TaskRepo::delete(&store, &task.comic_id)
             .map_err(|err| ApiError(CommandError::from("清理任务失败", err)))?;
         removed += 1;
     }
