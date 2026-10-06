@@ -9,19 +9,6 @@ use serde::{Deserialize, Serialize};
 
 use super::types::{now_ts, DbImage, DbTask, DbTaskState, Store};
 
-/// 把应用层的 `comic_id: &str` 转成 DB 层的整数。
-///
-/// TODO(0d): DB 列改为 TEXT 后，删除这层转换。
-/// 当前 `download_task.comic_id` / `download_image.comic_id` 仍是
-/// `INTEGER PRIMARY KEY`（整数亲和性），绑定字符串会被存成整数、
-/// 读回 String 会失败。这是「类型统一先行、DB schema 后改」的临时兼容层，
-/// 只在 repo 的 DB 边界出现，调用方无感知。
-fn db_comic_id(comic_id: &str) -> anyhow::Result<i64> {
-    comic_id
-        .parse::<i64>()
-        .with_context(|| format!("comic_id 不是整数（0d 迁移前 DB 列仍是 INTEGER）: {comic_id}"))
-}
-
 /// 任务列表的聚合统计，给前端顶部卡片用。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,20 +33,23 @@ impl TaskRepo {
     ///
     /// **不覆盖 `state` / 进度 / 错误**：重下同一本漫画时，
     /// 那些字段由下载过程自己按步推进，这里只负责标题和目录快照。
+    ///
+    /// v2 之后任务粒度是「章节」，对 wnacg 而言 `chapter_id` 恒等于
+    /// `comic_id`。`chapter_title` / `chapter_order` 同属合成单章节的投影。
     pub fn upsert_new(store: &Store, comic_id: &str, title: &str, dir: &str) -> anyhow::Result<()> {
-        // TODO(0d): DB 列改为 TEXT 后删除。
-        let comic_id = db_comic_id(comic_id)?;
         let now = now_ts();
         store.with_conn(|conn| {
             conn.execute(
                 r#"
                 INSERT INTO download_task
-                    (comic_id, comic_title, state, download_dir, created_at, updated_at)
-                VALUES (?1, ?2, 'pending', ?3, ?4, ?4)
-                ON CONFLICT(comic_id) DO UPDATE SET
-                    comic_title  = excluded.comic_title,
-                    download_dir = excluded.download_dir,
-                    updated_at   = excluded.updated_at
+                    (chapter_id, comic_id, comic_title, chapter_title, chapter_order,
+                     state, download_dir, created_at, updated_at)
+                VALUES (?1, ?1, ?2, ?2, 1, 'pending', ?3, ?4, ?4)
+                ON CONFLICT(chapter_id) DO UPDATE SET
+                    comic_title   = excluded.comic_title,
+                    chapter_title = excluded.chapter_title,
+                    download_dir  = excluded.download_dir,
+                    updated_at    = excluded.updated_at
                 "#,
                 params![comic_id, title, dir, now],
             )
@@ -70,11 +60,9 @@ impl TaskRepo {
 
     /// 从列表里移除任务（连同图片明细）。
     pub fn delete(store: &Store, comic_id: &str) -> anyhow::Result<()> {
-        // TODO(0d): DB 列改为 TEXT 后删除。
-        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             conn.execute(
-                "DELETE FROM download_task WHERE comic_id = ?1",
+                "DELETE FROM download_task WHERE chapter_id = ?1",
                 params![comic_id],
             )
             .context("删除 download_task 失败")?;
@@ -98,14 +86,12 @@ impl TaskRepo {
         state: DbTaskState,
         err: Option<&str>,
     ) -> anyhow::Result<()> {
-        // TODO(0d): DB 列改为 TEXT 后删除。
-        let comic_id = db_comic_id(comic_id)?;
         let now = now_ts();
         store.with_conn(|conn| {
             conn.execute(
                 "UPDATE download_task
                     SET state = ?2, last_error = ?3, updated_at = ?4
-                  WHERE comic_id = ?1",
+                  WHERE chapter_id = ?1",
                 params![comic_id, state.as_str(), err, now],
             )
             .context("更新任务状态失败")?;
@@ -115,11 +101,9 @@ impl TaskRepo {
 
     /// 更新重试次数。
     pub fn set_retry_count(store: &Store, comic_id: &str, retry_count: i64) -> anyhow::Result<()> {
-        // TODO(0d): DB 列改为 TEXT 后删除。
-        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             conn.execute(
-                "UPDATE download_task SET retry_count = ?2, updated_at = ?3 WHERE comic_id = ?1",
+                "UPDATE download_task SET retry_count = ?2, updated_at = ?3 WHERE chapter_id = ?1",
                 params![comic_id, retry_count, now_ts()],
             )
             .context("更新任务重试次数失败")?;
@@ -133,13 +117,11 @@ impl TaskRepo {
         comic_id: &str,
         total: i64,
     ) -> anyhow::Result<()> {
-        // TODO(0d): DB 列改为 TEXT 后删除。
-        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             conn.execute(
                 "UPDATE download_task
                     SET total_img_count = ?2, done_img_count = 0, updated_at = ?3
-                  WHERE comic_id = ?1",
+                  WHERE chapter_id = ?1",
                 params![comic_id, total, now_ts()],
             )
             .context("更新任务图片总数失败")?;
@@ -152,13 +134,11 @@ impl TaskRepo {
     /// 只有在批量重算（比如重下完成、恢复核对文件系统）时才用；
     /// 单张图片完成走 [`ImageRepo::mark_done`]，那里是原子自增。
     pub fn set_progress(store: &Store, comic_id: &str, done: i64) -> anyhow::Result<()> {
-        // TODO(0d): DB 列改为 TEXT 后删除。
-        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             conn.execute(
                 "UPDATE download_task
                     SET done_img_count = ?2, updated_at = ?3
-                  WHERE comic_id = ?1",
+                  WHERE chapter_id = ?1",
                 params![comic_id, done, now_ts()],
             )
             .context("更新任务进度失败")?;
@@ -168,11 +148,9 @@ impl TaskRepo {
 
     /// 按主键读一行。
     pub fn get(store: &Store, comic_id: &str) -> anyhow::Result<Option<DbTask>> {
-        // TODO(0d): DB 列改为 TEXT 后删除。
-        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             let mut stmt = conn
-                .prepare("SELECT * FROM download_task WHERE comic_id = ?1")
+                .prepare("SELECT * FROM download_task WHERE chapter_id = ?1")
                 .context("准备查询任务失败")?;
             let row = stmt
                 .query_row(params![comic_id], DbTask::from_row)
@@ -274,16 +252,14 @@ impl ImageRepo {
         comic_id: &str,
         urls: &[String],
     ) -> anyhow::Result<()> {
-        // TODO(0d): DB 列改为 TEXT 后删除。
-        let comic_id = db_comic_id(comic_id)?;
         let now = now_ts();
         store.with_tx(|tx| {
             let mut stmt = tx
                 .prepare(
                     r#"
-                    INSERT INTO download_image (comic_id, img_index, url, state, updated_at)
+                    INSERT INTO download_image (chapter_id, img_index, url, state, updated_at)
                     VALUES (?1, ?2, ?3, 'pending', ?4)
-                    ON CONFLICT(comic_id, img_index) DO NOTHING
+                    ON CONFLICT(chapter_id, img_index) DO NOTHING
                     "#,
                 )
                 .context("准备插入图片失败")?;
@@ -305,8 +281,6 @@ impl ImageRepo {
         img_index: i64,
         bytes: Option<i64>,
     ) -> anyhow::Result<()> {
-        // TODO(0d): DB 列改为 TEXT 后删除。
-        let comic_id = db_comic_id(comic_id)?;
         let now = now_ts();
         store.with_tx(|tx| {
             let changed = tx
@@ -314,7 +288,7 @@ impl ImageRepo {
                     r#"
                     UPDATE download_image
                        SET state = 'done', last_error = NULL, bytes = ?3, updated_at = ?4
-                     WHERE comic_id = ?1 AND img_index = ?2 AND state != 'done'
+                     WHERE chapter_id = ?1 AND img_index = ?2 AND state != 'done'
                     "#,
                     params![comic_id, img_index, bytes, now],
                 )
@@ -326,7 +300,7 @@ impl ImageRepo {
                 tx.execute(
                     "UPDATE download_task
                         SET done_img_count = done_img_count + 1, updated_at = ?2
-                      WHERE comic_id = ?1",
+                      WHERE chapter_id = ?1",
                     params![comic_id, now],
                 )
                 .context("推进任务进度失败")?;
@@ -342,8 +316,6 @@ impl ImageRepo {
         img_index: i64,
         err: &str,
     ) -> anyhow::Result<()> {
-        // TODO(0d): DB 列改为 TEXT 后删除。
-        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             conn.execute(
                 r#"
@@ -352,7 +324,7 @@ impl ImageRepo {
                        retry_count = retry_count + 1,
                        last_error = ?3,
                        updated_at = ?4
-                 WHERE comic_id = ?1 AND img_index = ?2
+                 WHERE chapter_id = ?1 AND img_index = ?2
                 "#,
                 params![comic_id, img_index, err, now_ts()],
             )
@@ -365,13 +337,11 @@ impl ImageRepo {
     ///
     /// 恢复时用它决定要重下哪些，而不是「整本重下」。
     pub fn list_pending_indexes(store: &Store, comic_id: &str) -> anyhow::Result<Vec<i64>> {
-        // TODO(0d): DB 列改为 TEXT 后删除。
-        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
                     "SELECT img_index FROM download_image
-                      WHERE comic_id = ?1 AND state != 'done'
+                      WHERE chapter_id = ?1 AND state != 'done'
                       ORDER BY img_index ASC",
                 )
                 .context("准备未完成图片查询失败")?;
@@ -388,12 +358,10 @@ impl ImageRepo {
 
     /// 列出某本漫画的全部图片行。
     pub fn list(store: &Store, comic_id: &str) -> anyhow::Result<Vec<DbImage>> {
-        // TODO(0d): DB 列改为 TEXT 后删除。
-        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT * FROM download_image WHERE comic_id = ?1 ORDER BY img_index ASC",
+                    "SELECT * FROM download_image WHERE chapter_id = ?1 ORDER BY img_index ASC",
                 )
                 .context("准备图片列表查询失败")?;
             let rows = stmt
@@ -409,12 +377,10 @@ impl ImageRepo {
 
     /// 数已完成张数。恢复时用来和任务里的计数对账。
     pub fn count_done(store: &Store, comic_id: &str) -> anyhow::Result<i64> {
-        // TODO(0d): DB 列改为 TEXT 后删除。
-        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             let count: i64 = conn
                 .query_row(
-                    "SELECT COUNT(*) FROM download_image WHERE comic_id = ?1 AND state = 'done'",
+                    "SELECT COUNT(*) FROM download_image WHERE chapter_id = ?1 AND state = 'done'",
                     params![comic_id],
                     |row| row.get(0),
                 )
@@ -425,11 +391,9 @@ impl ImageRepo {
 
     /// 清空一本漫画的图片记录（重下前调用）。
     pub fn clear(store: &Store, comic_id: &str) -> anyhow::Result<()> {
-        // TODO(0d): DB 列改为 TEXT 后删除。
-        let comic_id = db_comic_id(comic_id)?;
         store.with_conn(|conn| {
             conn.execute(
-                "DELETE FROM download_image WHERE comic_id = ?1",
+                "DELETE FROM download_image WHERE chapter_id = ?1",
                 params![comic_id],
             )
             .context("清空图片记录失败")?;

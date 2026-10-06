@@ -31,6 +31,69 @@ pub struct Store {
     path: Arc<PathBuf>,
 }
 
+/// schema 迁移前的整库备份。
+///
+/// **为什么必须备份**：v2 是破坏性迁移（`DROP TABLE` + 重建），一旦
+/// `COMMIT` 成功就无法从 SQL 层回退。备份文件是用户最后的退路。
+///
+/// 几个刻意的选择：
+///
+/// - **覆盖所有版本升级**：条件用 `current < SCHEMA_VERSION`，而不是
+///   `current == 1`。将来加 v3/v4 时，这条路径自动生效，不需要改。
+/// - **在 `BEGIN` 之前复制**：事务回滚不该影响备份 —— 迁移失败时，
+///   备份仍然在，用户可以手工恢复。
+/// - **已存在则不覆盖，只记日志**：重复启动（比如上次迁移失败后重启）
+///   时，第一次的备份才是「迁移前」的真实快照；覆盖它反而丢掉原始状态。
+/// - **复制失败即中止**：返回 `Err` 让调用方跳过迁移，宁可不迁移，
+///   也不能无备份改表。
+///
+/// `existed_before_open` 必须由调用方在 `Connection::open` **之前**采样
+/// —— open 会创建文件，之后再判断就分不清全新库和已有库了。
+fn backup_before_migration(
+    db_path: &Path,
+    existed_before_open: bool,
+    current: i64,
+) -> anyhow::Result<()> {
+    // 已经是最新（或更新，虽然后者会在 migrations::run 里被拒）——无需备份。
+    if current >= migrations::SCHEMA_VERSION {
+        return Ok(());
+    }
+
+    // 全新库：没有旧数据要保护。直接让 migrations 建 v1→v2 表结构。
+    if !existed_before_open {
+        tracing::info!("数据库不存在，无需迁移前备份（将直接建最新表结构）");
+        return Ok(());
+    }
+
+    let backup = PathBuf::from(format!("{}.pre-v2", db_path.display()));
+    if backup.exists() {
+        tracing::warn!(
+            err_title = "迁移前备份文件已存在，不覆盖",
+            backup = %backup.display(),
+            "保留首次备份作为迁移前快照；如需重新迁移请先手工处理该文件"
+        );
+        return Ok(());
+    }
+
+    std::fs::copy(db_path, &backup).with_context(|| {
+        format!(
+            "迁移前备份数据库失败：`{}` → `{}`。已中止迁移，数据库未被修改。",
+            db_path.display(),
+            backup.display()
+        )
+    })?;
+
+    let bytes = std::fs::metadata(&backup).map(|m| m.len()).unwrap_or(0);
+    tracing::info!(
+        backup = %backup.display(),
+        bytes,
+        from_version = current,
+        to_version = migrations::SCHEMA_VERSION,
+        "已在迁移前备份数据库"
+    );
+    Ok(())
+}
+
 impl Store {
     /// 打开（或创建）数据库，并跑完迁移。
     pub fn open(db_path: &Path) -> anyhow::Result<Self> {
@@ -38,6 +101,12 @@ impl Store {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("创建数据库目录 `{}` 失败", parent.display()))?;
         }
+
+        // **必须在 `Connection::open` 之前判断**：open 会创建文件，
+        // 之后再判断 `exists()` 就分不清「全新库」和「已有库」了。
+        // 全新库没有旧数据要保护，跳过备份；已有库若落后于当前
+        // schema 版本，则先备份再迁移。
+        let existed_before_open = db_path.exists();
 
         let conn = Connection::open(db_path)
             .with_context(|| format!("打开数据库 `{}` 失败", db_path.display()))?;
@@ -57,7 +126,37 @@ impl Store {
             );
         }
 
+        // 迁移前备份。判断条件是「库已存在且落后于当前 schema 版本」——
+        // 这样将来 v2→v3 等所有版本升级都自动走这条路径，不需要每加一版
+        // 就改一次这里。
+        //
+        // 注意时机：备份必须在 `migrations::run` 的 `BEGIN` 之前完成，
+        // 事务回滚不该影响备份；备份失败则**中止**，不调 migrations::run
+        // ——「不能无备份改表」的落点就在这里。
+        let current: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .context("读取 user_version 失败")?;
+        backup_before_migration(db_path, existed_before_open, current)?;
+
         migrations::run(&conn).context("执行数据库迁移失败")?;
+
+        // 迁移会临时关掉外键（`DROP TABLE` 需要），并在结束时恢复。
+        // **恢复万一没生效，`download_image` 的级联删除会静默失效**
+        // ——删任务留下孤儿图片行，而且不报任何错。所以在打开时
+        // 硬校验一次，不依赖 `tune()` 那行 pragma 的"应该生效"。
+        //
+        // 这里不用 `tracing::warn!`：日志在 `main.rs` 里比 store 晚初始化，
+        // 此刻打日志会丢。直接返回错误，让调用方看到。
+        let fk: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+            .context("读取 foreign_keys 失败")?;
+        if fk != 1 {
+            anyhow::bail!(
+                "数据库 `{}` 打开后 `foreign_keys` 为 {fk}（应为 1）。\
+                 级联删除会失效，拒绝继续以免产生孤儿图片行。",
+                db_path.display()
+            );
+        }
 
         Ok(Self {
             conn: Arc::new(parking_lot::Mutex::new(conn)),
@@ -230,21 +329,22 @@ impl DbImageState {
 
 /// `download_task` 的一行。
 ///
-/// wnacg 的任务粒度是**整本漫画**（不像 jmcomic 分章节），
-/// 因此主键是 `comic_id`。
+/// 主键是 `chapter_id`（TEXT），与 jmcomic/picacomic 的「漫画 → 章节 →
+/// 图片」三级模型对齐。**wnacg 站点没有章节层**，所以它是合成单章节
+/// 在 DB 层的投影：`chapter_id` 恒等于 `comic_id`、`chapter_title`
+/// 恒等于 `comic_title`、`chapter_order` 恒为 1 —— 与
+/// `Comic::from_html` 里合成的那个唯一 `ChapterInfo` 一一对应。
 ///
-/// `comic_id` 类型为 `String` 以对齐 jmcomic/picacomic 的领域模型
-/// ——它们的三级模型是「漫画 → 章节 → 图片」，而 wnacg 没有章节层。
-///
-/// 关于 `chapter_*` 列：0a 类型统一后，`ChapterInfo` 已作为合成单章节
-/// 进入领域模型（`chapter_id` 恒等于 `comic_id`）。对应的 `chapter_id`
-/// 列将在 **0d** 的 schema 迁移中加入，届时其值同样恒等于 `comic_id`
-/// ——即「一个漫画一个合成章节」在 DB 层的投影。
+/// v1 的主键是 `comic_id INTEGER`；v2 迁移（见 `migrations::migrate_v2`）
+/// 重建了这张表，把主键换成 `chapter_id TEXT` 并保留 `comic_id` 为普通列。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DbTask {
+    pub chapter_id: String,
     pub comic_id: String,
     pub comic_title: String,
+    pub chapter_title: String,
+    pub chapter_order: i64,
     pub state: DbTaskState,
     pub total_img_count: i64,
     pub done_img_count: i64,
@@ -258,10 +358,13 @@ pub struct DbTask {
 }
 
 /// `download_image` 的一行。
+///
+/// `chapter_id` 是外键，指向 `download_task.chapter_id`。
+/// 对 wnacg 而言它恒等于所属漫画的 `comic_id`。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DbImage {
-    pub comic_id: String,
+    pub chapter_id: String,
     pub img_index: i64,
     pub url: String,
     pub state: DbImageState,
@@ -286,10 +389,11 @@ impl DbTask {
             )
         })?;
         Ok(Self {
-            // TODO(0d): DB 列改为 TEXT 后，改为 row.get("comic_id")? 直接读 String。
-            // 当前列是 INTEGER PRIMARY KEY（整数亲和性），只能先读 i64 再转。
-            comic_id: row.get::<_, i64>("comic_id")?.to_string(),
+            chapter_id: row.get("chapter_id")?,
+            comic_id: row.get("comic_id")?,
             comic_title: row.get("comic_title")?,
+            chapter_title: row.get("chapter_title")?,
+            chapter_order: row.get("chapter_order")?,
             state,
             total_img_count: row.get("total_img_count")?,
             done_img_count: row.get("done_img_count")?,
@@ -316,8 +420,7 @@ impl DbImage {
             )
         })?;
         Ok(Self {
-            // TODO(0d): DB 列改为 TEXT 后，改为 row.get("comic_id")? 直接读 String。
-            comic_id: row.get::<_, i64>("comic_id")?.to_string(),
+            chapter_id: row.get("chapter_id")?,
             img_index: row.get("img_index")?,
             url: row.get("url")?,
             state,
